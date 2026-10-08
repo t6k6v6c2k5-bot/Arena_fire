@@ -160,3 +160,7 @@ body:not(.touch-ui) .wb b { font-size: 10px; }
 #streak.on { animation: st 1.6s ease-out forwards; }
 @keyframes st { 0% { opacity: 0; transform: scale(1.8); } 12% { opacity: 1; transform: scale(1); } 75% { opacity: 1; } 100% { opacity: 0; } }
 #crosshair { transition: opacity 0.1s; }
+
+#bAuto { left: calc(154px + var(--sal)); top: calc(30px + var(--sat)); font-weight: 800; }
+#bAuto.on { background: rgba(239, 68, 68, 0.55); border-color: #ff8c8c; }
+.slider input[type=checkbox] { width: 22px; height: 22px; }

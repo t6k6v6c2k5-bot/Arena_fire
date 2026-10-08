@@ -214,6 +214,35 @@ assert.ok(received.shot > 3, `событий shot: ${received.shot}`);
   assert.ok(enemy.hp < 100 || !enemy.alive, 'враг не получил урон');
 }
 
+// 4c. Авто-огонь: враг под прицелом, кнопку огня не нажимаем — стрельба идёт сама; без врага под прицелом — нет.
+{
+  assert.equal(A.autoFire, true, 'на таче авто-огонь по умолчанию включён');
+  const enemy = [...room.players.values()].find((p) => p.team !== human.team && p.alive);
+  const saved = [...room.players.values()].filter((p) => p !== human).map((p) => [p, p.bot, p.ai]);
+  for (const p of room.players.values()) if (p !== enemy && p !== human) { p.x = 0; p.z = -20; p.vx = p.vz = 0; p.protectUntil = 0; p.bot = false; p.ai = null; }
+  enemy.bot = false; enemy.ai = null; enemy.protectUntil = 0; human.protectUntil = 0;
+  human.x = -10; human.z = 18; human.y = 0; enemy.x = 6; enemy.z = 18; enemy.y = 0; enemy.hp = 100; enemy.hist = [];
+  A.view.yaw = -Math.PI / 2; A.view.pitch = Math.atan2(1.0 - S.PLAYER.eye, 16);
+  A.setAuto(false);
+  runFrames(25);
+  const before = human.wp[0].mag;
+  runFrames(40);
+  assert.equal(human.wp[0].mag, before, 'при выключенном авто-огне стрельбы быть не должно');
+  A.setAuto(true);
+  for (let i = 0; i < 40; i++) { human.hp = 1e6; A.view.yaw = -Math.PI / 2; A.view.pitch = Math.atan2(1.0 - S.PLAYER.eye, 16); runFrames(1); }
+  human.hp = 100;
+  assert.ok(human.wp[0].mag < before, 'авто-огонь не стрелял по врагу под прицелом');
+  assert.ok(enemy.hp < 100 || !enemy.alive, 'авто-огонь не нанёс урон');
+  // отвернулись — перестал
+  A.view.yaw = Math.PI / 2;
+  runFrames(10);
+  const m1 = human.wp[0].mag;
+  runFrames(40);
+  assert.equal(human.wp[0].mag, m1, 'авто-огонь стреляет без цели');
+  A.setAuto(true);
+  for (const [p, bot, ai] of saved) { p.bot = bot; p.ai = ai; }
+}
+
 // 5. Смена оружия: панель внизу и клавиши 1–5, все пять видов.
 ptr('wb1', 'pointerdown');
 runFrames(20);

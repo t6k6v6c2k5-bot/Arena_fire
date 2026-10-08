@@ -939,6 +939,7 @@ $('playBtn').addEventListener('click', () => {
 
 // ---------- Индикатор цели под прицелом ----------
 let lockShown = false;
+let lockHit = false;
 function updateTargetLock() {
   let hit = false;
   if (joined && alive && !menuOpen) {
@@ -949,10 +950,32 @@ function updateTargetLock() {
       if (r.team === myTeam || !r.wasAlive || !r.model.visible) continue;
       const p = r.model.position;
       const t = S.rayAABB(ox, oy, oz, dx, dy, dz, p.x - 0.55, p.y, p.z - 0.55, p.x + 0.55, p.y + 1.85, p.z + 0.55);
-      if (t < 150 && S.rayWorld(ox, oy, oz, dx, dy, dz, t) >= t) { hit = true; break; }
+      if (t < S.WEAPONS[selWeapon].range && S.rayWorld(ox, oy, oz, dx, dy, dz, t) >= t) { hit = true; break; }
     }
   }
+  lockHit = hit;
   if (hit !== lockShown) { lockShown = hit; el.crosshair.classList.toggle('lock', hit); }
+}
+
+// ---------- Авто-огонь: стреляем сами, пока враг под прицелом ----------
+let autoFire = localStorage.getItem('af_auto') === null ? isTouch : localStorage.getItem('af_auto') === '1';
+function setAuto(on) {
+  autoFire = !!on;
+  try { localStorage.setItem('af_auto', autoFire ? '1' : '0'); } catch { /* ignore */ }
+  $('autoFire').checked = autoFire;
+  $('bAuto').classList.toggle('on', autoFire);
+}
+$('autoFire').addEventListener('change', (e) => setAuto(e.target.checked));
+hold($('bAuto'), () => setAuto(!autoFire));
+setAuto(autoFire);
+function autoFireUpdate(nowS) {
+  if (!autoFire || !lockHit || !joined || !alive || menuOpen || matchState === 1) return;
+  if (info.rl > 0 || nowS < localNextFire) return;
+  if (selWeapon === 4 && adsAmt < 0.85) return; // снайперка: только в оптике
+  const a = info.wp?.[selWeapon];
+  if (!a || a[0] <= 0) return;
+  input.localTap = true;
+  input.fireLatch = true; // одиночный импульс на тик: для неавтоматов сервер видит нажатие
 }
 
 // ---------- Прицеливание / отдача ----------
@@ -1036,12 +1059,13 @@ function frame(nowMs) {
   if (steps >= 5) acc = 0;
 
   updateAds(dt, nowMs / 1000);
+  updateTargetLock();
+  autoFireUpdate(nowMs / 1000);
   localFireUpdate(nowMs / 1000);
   updateRemotes(dt);
   const speed = updateCamera(dt);
   updateViewmodel(dt, speed);
   fx.update(dt, camPos);
-  updateTargetLock();
 
   // прицел: зазор соответствует реальному разбросу оружия
   const w = S.WEAPONS[selWeapon];
@@ -1078,6 +1102,8 @@ window.__arena = {
   get ads() { return adsAmt; },
   get fov() { return curFov; },
   get streak() { return killStreak; },
+  get autoFire() { return autoFire; },
+  setAuto,
   fx, audio, scene, vmScene,
   get vmPos() { const v = vmViews[selWeapon]; return v ? v.group.position : null; },
   get vmShown() { return vmShown; },

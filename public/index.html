@@ -38,6 +38,9 @@
     <b id="hitm"></b>
   </div>
 
+  <div id="scope" class="hidden"><i class="h"></i><i class="v"></i><i class="dot"></i></div>
+  <div id="dmgnums"></div>
+  <div id="streak"></div>
   <div id="dmgvig"></div>
   <div id="dmgdir"><i></i></div>
   <div id="prot" class="hidden">ЗАЩИТА</div>
@@ -46,6 +49,13 @@
   <div id="bl">
     <div id="hpnum">100</div>
     <div id="hpbar"><div id="hpfill"></div></div>
+  </div>
+  <div id="wbar">
+    <button class="wb" id="wb0"><b>1</b>АК</button>
+    <button class="wb" id="wb1"><b>2</b>ПМ</button>
+    <button class="wb" id="wb2"><b>3</b>ДР</button>
+    <button class="wb" id="wb3"><b>4</b>ПП</button>
+    <button class="wb" id="wb4"><b>5</b>СН</button>
   </div>
   <div id="br">
     <div id="wname">Автомат</div>
@@ -60,7 +70,7 @@
   <button id="bFire" class="btn big">🔫</button>
   <button id="bJump" class="btn">⤒</button>
   <button id="bReload" class="btn">⟳</button>
-  <button id="bWeapon" class="btn">⇄</button>
+  <button id="bAds" class="btn">◎</button>
   <button id="bScore" class="btn sm">≡</button>
   <button id="bMenu" class="btn sm">II</button>
   <button id="bFull" class="btn sm">⛶</button>
@@ -89,8 +99,8 @@
     <div id="status"></div>
     <ul class="help">
       <li class="pc">WASD — движение · мышь — прицел · ЛКМ — огонь</li>
-      <li class="pc">R — перезарядка · 1/2/3 — оружие · Пробел — прыжок · Tab — счёт</li>
-      <li class="touch">Левый стик — движение · правая часть — обзор · 🔫 — огонь</li>
+      <li class="pc">ПКМ — прицел · R — перезарядка · 1–5 / колесо — оружие · Пробел — прыжок · Tab — счёт</li>
+      <li class="touch">Левый стик — движение · правая часть — обзор · 🔫 — огонь · ◎ — прицел · панель внизу — оружие</li>
       <li>Победа — первая команда до 40 убийств или больше убийств за 5 минут</li>
     </ul>
   </div>

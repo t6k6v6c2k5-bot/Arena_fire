@@ -82,7 +82,7 @@ html, body {
 .btn.big { width: 92px; height: 92px; font-size: 36px; right: calc(26px + var(--sar)); bottom: calc(40px + var(--sab)); background: rgba(239, 68, 68, 0.35); border-color: rgba(255, 140, 140, 0.7); }
 #bJump { right: calc(128px + var(--sar)); bottom: calc(26px + var(--sab)); }
 #bReload { right: calc(34px + var(--sar)); bottom: calc(142px + var(--sab)); }
-#bWeapon { right: calc(110px + var(--sar)); bottom: calc(110px + var(--sab)); }
+#bAds { right: calc(110px + var(--sar)); bottom: calc(110px + var(--sab)); }
 .btn.sm { width: 40px; height: 40px; font-size: 16px; }
 #bScore { left: calc(10px + var(--sal)); top: calc(30px + var(--sat)); }
 #bMenu { left: calc(58px + var(--sal)); top: calc(30px + var(--sat)); }
@@ -134,3 +134,29 @@ body:not(.touch-ui) .zone { display: none; }
   .secondary { margin-top: 6px; padding: 8px; }
   #nameInput { padding: 8px 12px; }
 }
+
+/* Панель оружия */
+#wbar { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(8px + var(--sab)); display: flex; gap: 5px; pointer-events: auto; touch-action: none; }
+.wb { position: relative; width: 44px; height: 38px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.28); background: rgba(8, 14, 22, 0.55); color: #fff; font-size: 13px; font-weight: 800; padding: 0; opacity: 0.8; }
+.wb b { position: absolute; left: 4px; top: 1px; font-size: 9px; font-weight: 600; opacity: 0.6; }
+.wb.on { background: rgba(250, 204, 21, 0.28); border-color: #facc15; opacity: 1; }
+.wb.empty { color: #f87171; }
+body:not(.touch-ui) .wb b { font-size: 10px; }
+
+/* Снайперский прицел */
+#scope { position: absolute; inset: 0; background: radial-gradient(circle at 50% 50%, transparent 0, transparent 33vh, rgba(0, 0, 0, 0.96) 33.6vh); }
+#scope i { position: absolute; background: #000; }
+#scope .h { left: calc(50% - 33vh); width: 66vh; top: calc(50% - 1px); height: 2px; }
+#scope .v { top: calc(50% - 33vh); height: 66vh; left: calc(50% - 1px); width: 2px; }
+#scope .dot { left: calc(50% - 3px); top: calc(50% - 3px); width: 6px; height: 6px; border-radius: 50%; background: #e11; }
+
+/* Числа урона и серии */
+#dmgnums { position: absolute; left: 50%; top: 50%; width: 0; height: 0; }
+#dmgnums .n { position: absolute; font-weight: 900; font-size: 20px; color: #fff; text-shadow: 0 2px 4px #000; animation: dn 0.8s ease-out forwards; white-space: nowrap; }
+#dmgnums .n.hs { color: #ff4d4d; font-size: 26px; }
+#dmgnums .n.k { color: #facc15; font-size: 24px; }
+@keyframes dn { from { transform: translate(0, 0) scale(1.3); opacity: 1; } to { transform: translate(var(--dx, 20px), -60px) scale(0.9); opacity: 0; } }
+#streak { position: absolute; left: 0; right: 0; top: 18%; text-align: center; font-size: 30px; font-weight: 900; letter-spacing: 3px; color: #facc15; text-shadow: 0 3px 10px #000; opacity: 0; }
+#streak.on { animation: st 1.6s ease-out forwards; }
+@keyframes st { 0% { opacity: 0; transform: scale(1.8); } 12% { opacity: 1; transform: scale(1); } 75% { opacity: 1; } 100% { opacity: 0; } }
+#crosshair { transition: opacity 0.1s; }

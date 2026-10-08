@@ -31,9 +31,46 @@ export class Vector3 {
   }
 }
 
-export const Scene = U(), Color = U(), PerspectiveCamera = U(), HemisphereLight = U(), DirectionalLight = U(),
-  AmbientLight = U(), WebGLRenderer = U(), EdgesGeometry = U(), LineSegments = U(), BoxGeometry = U(), Mesh = U(),
-  MeshLambertMaterial = U(), LineBasicMaterial = U(), CanvasTexture = U(), PlaneGeometry = U(), MeshBasicMaterial = U(),
-  SphereGeometry = U(), Float32BufferAttribute = U(), Fog = U(), ConeGeometry = U(), Group = U(), Sprite = U(),
-  SpriteMaterial = U(), BufferGeometry = U(), Line = U(), OctahedronGeometry = U();
+// Минимальный Object3D: хранит трансформации и иерархию, чтобы математика моделей и эффектов реально считалась.
+class V3b {
+  constructor(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z; this.order = 'XYZ'; }
+  set(x, y, z) { this.x = x; this.y = y; this.z = z; return this; }
+  setScalar(s) { this.x = this.y = this.z = s; return this; }
+  copy(v) { this.x = v.x; this.y = v.y; this.z = v.z; return this; }
+}
+class Obj {
+  constructor() {
+    this.position = new V3b(); this.rotation = new V3b(); this.scale = new V3b(1, 1, 1);
+    this.children = []; this.parent = null; this.visible = true; this.userData = {}; this.renderOrder = 0;
+  }
+  add(...os) { for (const o of os) { this.children.push(o); o.parent = this; } return this; }
+  remove(o) { const i = this.children.indexOf(o); if (i >= 0) this.children.splice(i, 1); return this; }
+  lookAt() {}
+  rotateZ(a) { this.rotation.z += a; return this; }
+  updateMatrixWorld() {}
+}
+class Geom {
+  constructor(...args) { this.args = args; this.attributes = make(); }
+  rotateX() { return this; } rotateY() { return this; } rotateZ() { return this; } translate() { return this; } setAttribute() { return this; }
+}
+class Mat {
+  constructor(p = {}) { Object.assign(this, p); this.color = { set() {}, setHex(h) { this.hex = h; }, hex: p.color }; if (this.opacity === undefined) this.opacity = 1; }
+}
+class MeshS extends Obj { constructor(geometry, material) { super(); this.geometry = geometry; this.material = material; } }
+class SpriteS extends Obj { constructor(material) { super(); this.material = material; } }
+class Cam extends Obj {
+  constructor(fov = 50) { super(); this.fov = fov; this.aspect = 1; }
+  updateProjectionMatrix() { this.projections = (this.projections || 0) + 1; }
+}
+class SceneS extends Obj {}
+class Tex { constructor(c) { this.image = c; this.repeat = new V3b(); } }
+
+export const Scene = SceneS, PerspectiveCamera = Cam, HemisphereLight = Obj, DirectionalLight = Obj, AmbientLight = Obj,
+  Group = Obj, Mesh = MeshS, Sprite = SpriteS,
+  BoxGeometry = Geom, PlaneGeometry = Geom, SphereGeometry = Geom, ConeGeometry = Geom, CylinderGeometry = Geom, CapsuleGeometry = Geom,
+  OctahedronGeometry = Geom,
+  MeshLambertMaterial = Mat, MeshPhongMaterial = Mat, MeshBasicMaterial = Mat, SpriteMaterial = Mat, LineBasicMaterial = Mat,
+  CanvasTexture = Tex;
+export const Color = U(), WebGLRenderer = U(), EdgesGeometry = U(), LineSegments = U(), Float32BufferAttribute = U(), Fog = U(),
+  BufferGeometry = U(), Line = U();
 export const SRGBColorSpace = 'srgb', RepeatWrapping = 1000, NearestFilter = 1003, BackSide = 1, DoubleSide = 2, AdditiveBlending = 2;

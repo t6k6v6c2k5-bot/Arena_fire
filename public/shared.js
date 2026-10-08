@@ -18,10 +18,15 @@ export const MATCH = {
 
 export const TEAM_NAMES = ['СИНИЕ', 'КРАСНЫЕ'];
 
+// Поля: dmg — урон попадания; rate — пауза между выстрелами (с); spread — базовый разброс (рад);
+// bloom/bloomMax — рост разброса от очереди; adsMul — множитель разброса в прицеле;
+// fall [старт, длина, минимум] — падение урона с дистанции; zoom — FOV в прицеле; kick [вверх, вбок] — отдача.
 export const WEAPONS = [
-  { id: 'rifle',   name: 'Автомат',  dmg: 26, rate: 0.10, mag: 30, reserve: 120, reload: 2.0, spread: 0.014, pellets: 1, auto: true,  head: 2.0, range: 150 },
-  { id: 'pistol',  name: 'Пистолет', dmg: 34, rate: 0.28, mag: 12, reserve: 999, reload: 1.4, spread: 0.006, pellets: 1, auto: false, head: 2.2, range: 120 },
-  { id: 'shotgun', name: 'Дробовик', dmg: 11, rate: 0.85, mag: 6,  reserve: 30,  reload: 2.6, spread: 0.075, pellets: 8, auto: false, head: 1.5, range: 40 },
+  { id: 'rifle',   name: 'Автомат',   short: 'АК', dmg: 26, rate: 0.10,  mag: 30, reserve: 120, reload: 2.0, spread: 0.014, bloom: 0.0035, bloomMax: 0.03,  adsMul: 0.45, pellets: 1, auto: true,  head: 2.0, range: 150, fall: [30, 90, 0.65], zoom: 55, kick: [0.0050, 0.0020] },
+  { id: 'pistol',  name: 'Пистолет',  short: 'ПМ', dmg: 34, rate: 0.28,  mag: 12, reserve: 999, reload: 1.4, spread: 0.006, bloom: 0.006,  bloomMax: 0.03,  adsMul: 0.55, pellets: 1, auto: false, head: 2.2, range: 120, fall: [20, 50, 0.6],  zoom: 62, kick: [0.0120, 0.0040] },
+  { id: 'shotgun', name: 'Дробовик',  short: 'ДР', dmg: 11, rate: 0.85,  mag: 6,  reserve: 30,  reload: 2.6, spread: 0.075, bloom: 0,      bloomMax: 0,     adsMul: 0.75, pellets: 8, auto: false, head: 1.5, range: 40,  fall: [7, 18, 0.25],  zoom: 64, kick: [0.0500, 0.0080] },
+  { id: 'smg',     name: 'ПП',        short: 'ПП', dmg: 17, rate: 0.065, mag: 35, reserve: 140, reload: 1.8, spread: 0.020, bloom: 0.003,  bloomMax: 0.035, adsMul: 0.50, pellets: 1, auto: true,  head: 1.8, range: 90,  fall: [14, 40, 0.5],  zoom: 58, kick: [0.0035, 0.0025] },
+  { id: 'sniper',  name: 'Снайперка', short: 'СН', dmg: 90, rate: 1.3,   mag: 5,  reserve: 25,  reload: 2.8, spread: 0.050, bloom: 0,      bloomMax: 0,     adsMul: 0.03, pellets: 1, auto: false, head: 2.5, range: 300, fall: null,           zoom: 20, kick: [0.0300, 0.0040] },
 ];
 
 export const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -170,8 +175,9 @@ export function stepPlayer(p, inp, dt = DT) {
   let mx = clamp(inp.mx || 0, -1, 1), mz = clamp(inp.mz || 0, -1, 1);
   const len = Math.hypot(mx, mz);
   if (len > 1) { mx /= len; mz /= len; }
-  const wx = (-sy * mz + cy * mx) * PLAYER.speed;
-  const wz = (-cy * mz - sy * mx) * PLAYER.speed;
+  const spd = PLAYER.speed * (inp.ads ? 0.7 : 1);
+  const wx = (-sy * mz + cy * mx) * spd;
+  const wz = (-cy * mz - sy * mx) * spd;
   const k = Math.min(1, (p.onGround ? 14 : 3) * dt);
   p.vx += (wx - p.vx) * k;
   p.vz += (wz - p.vz) * k;

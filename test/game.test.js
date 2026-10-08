@@ -136,14 +136,52 @@ function duel() {
   assert.ok(b.hp < 100 && b.hp <= 100 - S.WEAPONS[2].dmg, `дробовик не попал: hp=${b.hp}`);
 }
 
+// 7a. Новые стволы: падение урона с дистанции, рост разброса, снайперка убивает выстрелом в голову.
+{
+  assert.equal(S.WEAPONS.length, 5);
+  const { room, a, b, sockA } = duel();
+  a.ads = true; a.assist = 0;
+  // ближний выстрел против дальнего (линия z=18 свободна по всей длине)
+  const dmgAt = (dist) => {
+    a.x = -28; a.z = 18; a.yaw = -Math.PI / 2; b.x = -28 + dist; b.z = 18;
+    a.pitch = Math.atan2(1.0 - S.PLAYER.eye, dist);
+    b.hp = 100; b.hist = []; a.nextFire = 0; a.bloom = 0; a.wp[0].mag = 30; a.reloading = false;
+    room.fire(a, Date.now());
+    return 100 - b.hp;
+  };
+  const near = dmgAt(12), far = dmgAt(56);
+  assert.equal(near, 26, `урон вблизи: ${near}`);
+  assert.ok(far > 0 && far < 22, `урон на 56 м должен падать: ${far}`);
+
+  // рост разброса от очереди и его затухание
+  a.bloom = 0; a.nextFire = 0; a.wp[0].mag = 30;
+  for (let i = 0; i < 8; i++) { a.nextFire = 0; room.fire(a, Date.now()); }
+  assert.ok(a.bloom > 0.02, `разброс не растёт: ${a.bloom}`);
+  a.alive = true;
+  tickN(room, S.TICK);
+  assert.ok(a.bloom < 0.01, `разброс не затухает: ${a.bloom}`);
+
+  // снайперка: голова — смерть с одного выстрела, ads обязателен для точности
+  a.weapon = 4; a.ads = true; a.x = -10; a.z = 18; b.x = 5; b.z = 18; b.hp = 100; b.alive = true; b.protectUntil = 0; a.nextFire = 0; a.reloading = false;
+  a.pitch = Math.atan2(1.68 - S.PLAYER.eye, 15);
+  room.fire(a, Date.now());
+  assert.ok(!b.alive, 'снайперка не убила выстрелом в голову');
+  const kill = sockA.events.filter((e) => e[0] === 'kill').at(-1)[1];
+  assert.equal(kill.hs, 1);
+  assert.equal(kill.w, 4);
+  assert.ok(kill.d >= 14 && kill.d <= 16, `дистанция убийства: ${kill.d}`);
+  const hit = sockA.events.filter((e) => e[0] === 'hit').at(-1)[1];
+  assert.ok(hit.d >= 90, `урон в событии hit: ${hit.d}`);
+}
+
 // 7b. Помощь прицеливания: выстрел мимо на ~3° попадает только с assist; сквозь стену не тянет.
 {
   const { room, a, b } = duel();
   a.pitch = Math.atan2(1.0 - S.PLAYER.eye, 15);
   a.yaw = -Math.PI / 2 + 0.05; // ~2.9° в сторону: на 15 м это ~0.75 м мимо цели
   let miss = 0, hit = 0;
-  for (let i = 0; i < 20; i++) { b.hp = 100; a.nextFire = 0; a.wp[0].mag = 30; a.assist = 0; room.fire(a, Date.now()); if (b.hp < 100) hit++; }
-  for (let i = 0; i < 20; i++) { b.hp = 100; a.nextFire = 0; a.wp[0].mag = 30; a.assist = 1; room.fire(a, Date.now()); if (b.hp < 100) miss++; }
+  for (let i = 0; i < 20; i++) { b.hp = 100; a.nextFire = 0; a.bloom = 0; a.wp[0].mag = 30; a.assist = 0; room.fire(a, Date.now()); if (b.hp < 100) hit++; }
+  for (let i = 0; i < 20; i++) { b.hp = 100; a.nextFire = 0; a.bloom = 0; a.wp[0].mag = 30; a.assist = 1; room.fire(a, Date.now()); if (b.hp < 100) miss++; }
   assert.equal(hit, 0, `без помощи выстрел мимо должен промахиваться, попаданий: ${hit}`);
   assert.ok(miss >= 18, `с помощью прицеливания должно попадать: ${miss}/20`);
   // за стеной помощь не работает: ставим цель за центральным зданием

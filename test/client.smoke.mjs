@@ -122,6 +122,21 @@ const press = (code) => winHandlers.keydown.forEach((f) => f({ code, target: { t
 const release = (code) => winHandlers.keyup.forEach((f) => f({ code }));
 const ptr = (id, type, extra = {}) => els[id].__h[type].forEach((f) => f({ pointerId: 1, clientX: 100, clientY: 100, preventDefault() {}, currentTarget: make(), ...extra }));
 
+// ---------- поддельный AudioContext: считаем созданные узлы, чтобы проверить, что звуки реально синтезируются ----------
+const audioStats = { osc: 0, src: 0 };
+globalThis.AudioContext = function () {
+  const base = { currentTime: 1, sampleRate: 8000, state: 'running', createBuffer: (c, n) => ({ getChannelData: () => new Float32Array(n) }) };
+  return new Proxy(base, {
+    get: (t2, p) => {
+      if (p in t2) return t2[p];
+      if (p === 'destination') return make();
+      if (p === 'createOscillator') return () => { audioStats.osc++; return make(); };
+      if (p === 'createBufferSource') return () => { audioStats.src++; return make(); };
+      return () => make();
+    },
+  });
+};
+
 // ---------- запуск клиента ----------
 await import('../public/client.js');
 const A = globalThis.__arena;
@@ -199,22 +214,98 @@ assert.ok(received.shot > 3, `событий shot: ${received.shot}`);
   assert.ok(enemy.hp < 100 || !enemy.alive, 'враг не получил урон');
 }
 
-// 5. Смена оружия и перезарядка.
-ptr('bWeapon', 'pointerdown'); ptr('bWeapon', 'pointerup');
+// 5. Смена оружия: панель внизу и клавиши 1–5, все пять видов.
+ptr('wb1', 'pointerdown');
 runFrames(20);
 assert.equal(A.weapon, 1);
 assert.equal(human.weapon, 1, 'сервер не переключил оружие');
-ptr('bReload', 'pointerdown'); ptr('bReload', 'pointerup');
-runFrames(5);
-ptr('bWeapon', 'pointerdown'); ptr('bWeapon', 'pointerup'); // 2 → дробовик
-ptr('bWeapon', 'pointerdown'); ptr('bWeapon', 'pointerup'); // 0 → автомат
+for (let i = 0; i < S.WEAPONS.length; i++) {
+  press('Digit' + (i + 1)); release('Digit' + (i + 1));
+  runFrames(14);
+  assert.equal(A.weapon, i, `клиент не выбрал оружие ${i}`);
+  assert.equal(human.weapon, i, `сервер не выбрал оружие ${i}`);
+}
+// чужие модели показывают оружие из снапшота и не ломаются
+for (const r of A.remotes.values()) {
+  assert.ok(r.m.weapon >= 0 && r.m.weapon < S.WEAPONS.length, 'у модели нет оружия');
+}
+
+// 5a. Прицеливание: кнопка ◎ — сужение FOV, замедление, серверный флаг ads.
+press('Digit1'); release('Digit1');
+runFrames(20);
+assert.equal(A.fov, 72, 'FOV вне прицела должен быть базовым');
+ptr('bAds', 'pointerdown'); ptr('bAds', 'pointerup');
+runFrames(40);
+assert.ok(A.ads > 0.95, `ADS не включился: ${A.ads}`);
+assert.ok(A.fov < 60, `FOV не сузился: ${A.fov}`);
+assert.equal(human.ads, true, 'сервер не получил ads');
+assert.equal(A.scoped, false, 'у автомата не должно быть оптики');
+// стрельба в прицеле, потом выключаем (повторное нажатие)
+ptr('bFire', 'pointerdown'); runFrames(10); ptr('bFire', 'pointerup'); runFrames(10);
+ptr('bAds', 'pointerdown'); ptr('bAds', 'pointerup');
+runFrames(40);
+assert.ok(A.ads < 0.05 && A.fov > 71, 'ADS не выключился');
+assert.equal(human.ads, false);
+
+// 5b. Снайперка: оптика включается, вьюмодель скрывается; смена оружия снимает прицел.
+press('Digit5'); release('Digit5'); runFrames(20);
+ptr('bAds', 'pointerdown'); ptr('bAds', 'pointerup');
+runFrames(60);
+assert.equal(A.scoped, true, 'оптика снайперки не включилась');
+assert.equal(A.vmShown, false, 'оружие должно прятаться в оптике');
+assert.ok(Math.abs(A.fov - S.WEAPONS[4].zoom) < 2, `FOV в оптике: ${A.fov}`);
+press('Digit1'); release('Digit1'); runFrames(30);
+assert.equal(A.scoped, false);
+assert.ok(A.ads < 0.1, 'смена оружия должна снимать прицел');
+
+// 5c. Перезарядка: вьюмодель анимируется без NaN, звук механизма.
 runFrames(10);
 human.wp[0].mag = 5;
+const oscBefore = audioStats.osc;
 ptr('bReload', 'pointerdown'); ptr('bReload', 'pointerup');
 runFrames(20);
 assert.ok(human.reloading, 'перезарядка не началась');
-runFrames(150);
+for (let i = 0; i < 130; i++) {
+  runFrames(1);
+  const vp = A.vmPos;
+  assert.ok(vp && Number.isFinite(vp.x) && Number.isFinite(vp.y) && Number.isFinite(vp.z), 'NaN в позе оружия при перезарядке');
+}
 assert.equal(human.wp[0].mag, 30, 'перезарядка не завершилась');
+assert.ok(audioStats.osc > oscBefore, 'звуки перезарядки не синтезировались');
+
+// 5d. Все виды оружия: выстрелы, перезарядки, ничего не падает и сцена без NaN.
+function sceneIsFinite(o, depth = 0) {
+  const p = o.position;
+  if (p && typeof p.x === 'number') {
+    for (const v of [p.x, p.y, p.z, o.scale.x, o.scale.y, o.scale.z, o.rotation.x, o.rotation.y, o.rotation.z]) if (!Number.isFinite(v)) return o;
+  }
+  for (const c of Array.isArray(o.children) ? o.children : []) { const bad = sceneIsFinite(c, depth + 1); if (bad) return bad; }
+  return null;
+}
+for (let i = 0; i < S.WEAPONS.length; i++) {
+  press('Digit' + (i + 1)); release('Digit' + (i + 1));
+  runFrames(30);
+  human.protectUntil = 0;
+  const checkAll = (what) => {
+    assert.equal(sceneIsFinite(A.scene), null, `NaN в сцене (${what}, оружие ${i})`);
+    assert.equal(sceneIsFinite(A.vmScene), null, `NaN во вьюмодели (${what}, оружие ${i})`);
+  };
+  ptr('bFire', 'pointerdown');
+  for (let f = 0; f < 30; f++) { runFrames(1); checkAll('стрельба'); }
+  ptr('bFire', 'pointerup');
+  ptr('bReload', 'pointerdown'); ptr('bReload', 'pointerup');
+  for (let f = 0; f < 60 * Math.ceil(S.WEAPONS[i].reload) + 10; f++) { runFrames(1); if (f % 3 === 0) checkAll('перезарядка'); }
+}
+press('Digit1'); release('Digit1'); runFrames(30);
+
+// 5e. Эффекты и звук.
+assert.ok(audioStats.osc > 20 && audioStats.src > 20, `звуков синтезировано: osc ${audioStats.osc}, noise ${audioStats.src}`);
+{
+  const { surfaceInfo } = await import('../public/fx.js');
+  assert.deepEqual(surfaceInfo(6, 1, -5, 0, -1, 0), { n: [0, 1, 0], c: 'crate' }, 'верх ящика');
+  assert.deepEqual(surfaceInfo(0, 3, -22, 0, 0, -1), { n: [0, 0, 1], c: 'wall' }, 'внутренняя сторона стены');
+  assert.deepEqual(surfaceInfo(10, 0, 10, 0, -1, 0).n, [0, 1, 0], 'пол');
+}
 
 // 6. Таблица счёта (Tab) и тач-переключатель.
 press('Tab'); runFrames(5); release('Tab'); runFrames(5);

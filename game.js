@@ -50,6 +50,8 @@ class Player {
     this.reloading = false;
     this.reloadEnd = 0;
     this.prevFire = false;
+    this.bloom = 0;   // рост разброса от очереди
+    this.ads = false; // прицеливание
     this.queue = [];
     this.ack = 0;
     this.hist = [];
@@ -149,6 +151,8 @@ class Room {
     p.reloading = false;
     p.nextFire = this.t + 0.4;
     p.prevFire = false;
+    p.bloom = 0;
+    p.ads = false;
     p.protectUntil = this.t + S.MATCH.protect;
     p.yaw = p.team === 0 ? -Math.PI / 2 : Math.PI / 2;
     p.pitch = 0;
@@ -196,7 +200,7 @@ class Room {
     const rx = cy, rz = -sy;
     const ux = sy * sp, uy = cp, uz = cy * sp;
     const hsp = Math.hypot(p.vx, p.vz);
-    let spread = w.spread * (1 + hsp * 0.12) + (p.onGround ? 0 : 0.03);
+    let spread = (w.spread + p.bloom) * (1 + hsp * 0.12) * (p.ads ? w.adsMul : 1) + (p.onGround ? 0 : 0.03);
     if (p.bot) spread *= this.skill.spread;
 
     const targets = [];
@@ -247,32 +251,35 @@ class Room {
       }
       if (hitT) {
         const head = oy + dy * dist > hitT.y + 1.42;
-        const rec = dmgTo.get(hitT.p) || { dmg: 0, head: false };
-        rec.dmg += w.dmg * (head ? w.head : 1);
+        const rec = dmgTo.get(hitT.p) || { dmg: 0, head: false, dist: 0 };
+        const fall = w.fall ? Math.max(w.fall[2], 1 - Math.max(0, dist - w.fall[0]) / w.fall[1]) : 1;
+        rec.dmg += w.dmg * (head ? w.head : 1) * fall;
+        rec.dist = Math.max(rec.dist, dist);
         rec.head = rec.head || head;
         dmgTo.set(hitT.p, rec);
       }
       if (ends.length < 4) ends.push([r2(ox + dx * dist), r2(oy + dy * dist), r2(oz + dz * dist), hitT ? 1 : 0]);
     }
 
+    p.bloom = Math.min(w.bloomMax, p.bloom + w.bloom);
     this.emit('shot', { id: p.id, w: p.weapon, o: [r2(ox), r2(oy), r2(oz)], e: ends });
 
     for (const [vic, rec] of dmgTo) {
-      this.damage(p, vic, Math.max(1, Math.round(rec.dmg * (p.bot ? this.skill.dmg : 1))), rec.head);
+      this.damage(p, vic, Math.max(1, Math.round(rec.dmg * (p.bot ? this.skill.dmg : 1))), rec.head, rec.dist);
     }
     if (ws.mag <= 0) this.startReload(p);
   }
 
-  damage(att, vic, amount, head) {
+  damage(att, vic, amount, head, dist = 0) {
     if (!vic.alive || this.state !== 0 || this.t < vic.protectUntil) return;
     vic.hp -= amount;
     const killed = vic.hp <= 0;
-    if (att.sock) att.sock.emit('hit', { hs: head ? 1 : 0, k: killed ? 1 : 0 });
+    if (att.sock) att.sock.emit('hit', { hs: head ? 1 : 0, k: killed ? 1 : 0, d: amount });
     if (vic.sock) vic.sock.emit('hurt', { x: r2(att.x), z: r2(att.z), hp: Math.max(0, vic.hp) });
-    if (killed) this.kill(att, vic, head);
+    if (killed) this.kill(att, vic, head, dist);
   }
 
-  kill(att, vic, head) {
+  kill(att, vic, head, dist = 0) {
     vic.alive = false;
     vic.hp = 0;
     vic.deaths++;
@@ -281,7 +288,7 @@ class Room {
     vic.respawnAt = this.t + S.MATCH.respawn;
     att.kills++;
     this.scores[att.team]++;
-    this.emit('kill', { k: att.id, v: vic.id, w: att.weapon, hs: head ? 1 : 0 });
+    this.emit('kill', { k: att.id, v: vic.id, w: att.weapon, hs: head ? 1 : 0, d: Math.round(dist) });
     if (this.scores[att.team] >= S.MATCH.killLimit) this.endMatch();
   }
 
@@ -323,6 +330,7 @@ class Room {
       jump: !!m.jump,
       fire: !!m.fire,
       reload: !!m.reload,
+      ads: !!m.ads,
       weapon: Number.isInteger(m.weapon) ? m.weapon : p.weapon,
       rt: num(m.rt, Date.now() - 100),
     });
@@ -332,6 +340,7 @@ class Room {
   applyInput(p, inp) {
     p.yaw = S.wrapAngle(num(inp.yaw));
     p.pitch = clamp(num(inp.pitch), -1.5, 1.5);
+    p.ads = !!inp.ads;
     S.stepPlayer(p, inp);
 
     const wi = inp.weapon;
@@ -339,6 +348,7 @@ class Room {
       p.weapon = wi;
       p.reloading = false;
       p.nextFire = Math.max(p.nextFire, this.t + 0.35);
+      p.bloom = 0;
     }
     if (inp.reload) this.startReload(p);
 
@@ -494,6 +504,7 @@ class Room {
     }
 
     for (const p of this.players.values()) {
+      if (p.bloom > 0) p.bloom = Math.max(0, p.bloom - 0.05 * S.DT);
       if (p.reloading && this.t >= p.reloadEnd) {
         const w = S.WEAPONS[p.weapon], ws = p.wp[p.weapon];
         if (p.bot) ws.res = 9999;
@@ -537,6 +548,7 @@ class Room {
           rl: p.reloading ? Math.max(0, r2(p.reloadEnd - this.t)) : 0,
           resp: p.alive ? 0 : Math.max(0, Math.ceil(p.respawnAt - this.t)),
           prot: this.t < p.protectUntil ? 1 : 0,
+          bl: r3(p.bloom), ads: p.ads ? 1 : 0,
         },
       });
     }

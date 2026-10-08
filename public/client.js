@@ -1,6 +1,9 @@
 // Arena Fire — клиент: Three.js рендер, управление (тач + ПК), предсказание движения, интерполяция, HUD, звук.
 import * as THREE from 'three';
 import * as S from './shared.js';
+import { makePlayerModel, buildViewmodel, animateViewmodel } from './models.js';
+import { createFx } from './fx.js';
+import { createAudio } from './audio.js';
 
 const $ = (id) => document.getElementById(id);
 const clamp = S.clamp;
@@ -11,7 +14,6 @@ document.body.classList.toggle('touch-ui', isTouch);
 try { tg?.ready(); tg?.expand(); tg?.disableVerticalSwipes?.(); } catch { /* вне Telegram */ }
 
 const INTERP = 100; // мс задержки интерполяции чужих игроков
-const WEAPON_ICON = ['🔫', '🔫', '💥'];
 
 // ---------- Состояние ----------
 let socket = null;
@@ -26,7 +28,7 @@ const me = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, onGround: true };
 const prev = { x: 0, y: 0, z: 0 };
 let alive = false;
 let deathAt = 0;
-let info = { hp: 100, w: 0, wp: [[30, 120], [12, 999], [6, 30]], rl: 0, resp: 0, prot: 0 };
+let info = { hp: 100, w: 0, wp: S.WEAPONS.map((w) => [w.mag, w.reserve]), rl: 0, resp: 0, prot: 0, bl: 0, ads: 0 };
 let menuOpen = true;
 let selWeapon = 0;
 let localNextFire = 0;
@@ -41,7 +43,7 @@ const pending = [];
 let seq = 0;
 let acc = 0;
 
-const input = { fireHeld: false, fireLatch: false, localTap: false, reloadLatch: false, jumpBtn: false };
+const input = { fireHeld: false, fireLatch: false, localTap: false, reloadLatch: false, jumpBtn: false, ads: false };
 const keys = {};
 let locked = false;
 let sens = parseFloat(localStorage.getItem('af_sens') || '1') || 1;
@@ -158,86 +160,64 @@ function buildWorld() {
 buildWorld();
 
 // ---------- Модели игроков ----------
-const lamb = (c) => new THREE.MeshLambertMaterial({ color: c, flatShading: true });
+const remotes = new Map();
+const fx = createFx(scene);
+const audio = createAudio();
+const camPos = { x: 0, y: 0, z: 0 }; // позиция камеры обычными числами
+fx.onCasingBounce = (x, z) => {
+  const d = Math.hypot(x - camPos.x, z - camPos.z);
+  if (d < 12) audio.casing(earPan(x, z), d);
+};
 
-function makeTag(text, color) {
-  const c = document.createElement('canvas');
-  c.width = 256; c.height = 64;
-  const g = c.getContext('2d');
-  g.font = 'bold 34px sans-serif';
-  g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.lineWidth = 6; g.strokeStyle = 'rgba(0,0,0,0.8)';
-  g.strokeText(text, 128, 32);
-  g.fillStyle = color; g.fillText(text, 128, 32);
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, depthTest: false, transparent: true }));
-  s.scale.set(1.5, 0.375, 1);
-  s.position.set(0, 2.15, 0);
-  s.renderOrder = 10;
-  return s;
+// базис взгляда (как на сервере)
+function basis() {
+  const cy = Math.cos(view.yaw), sy = Math.sin(view.yaw), cp = Math.cos(view.pitch), sp = Math.sin(view.pitch);
+  return { fx: -sy * cp, fy: sp, fz: -cy * cp, rx: cy, rz: -sy, ux: sy * sp, uy: cp, uz: cy * sp };
+}
+function earPan(x, z) {
+  const dx = x - camPos.x, dz = z - camPos.z;
+  const d = Math.hypot(dx, dz);
+  return d > 0.2 ? clamp((dx * Math.cos(view.yaw) - dz * Math.sin(view.yaw)) / d, -1, 1) : 0;
 }
 
 function makeRemote(pi) {
-  const team = pi.team;
-  const col = team === 0 ? 0x3b82f6 : 0xef4444;
-  const dark = team === 0 ? 0x1e3a8a : 0x7f1d1d;
-  const skin = 0xf1c9a5;
-  const model = new THREE.Group();
-  const box = (w, h, d, c, x, y, z, parent = model) => {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), lamb(c));
-    m.position.set(x, y, z);
-    parent.add(m);
-    return m;
-  };
-  const legL = new THREE.Group(); legL.position.set(-0.14, 0.8, 0); model.add(legL);
-  const legR = new THREE.Group(); legR.position.set(0.14, 0.8, 0); model.add(legR);
-  box(0.24, 0.8, 0.26, dark, 0, -0.4, 0, legL);
-  box(0.24, 0.8, 0.26, dark, 0, -0.4, 0, legR);
-  box(0.56, 0.62, 0.32, col, 0, 1.11, 0);
-  const head = new THREE.Group(); head.position.set(0, 1.42, 0); model.add(head);
-  box(0.3, 0.3, 0.3, skin, 0, 0.17, 0, head);
-  box(0.34, 0.13, 0.34, dark, 0, 0.3, 0, head);
-  const arms = new THREE.Group(); arms.position.set(0, 1.3, 0); model.add(arms);
-  box(0.13, 0.13, 0.5, col, -0.2, -0.15, -0.25, arms);
-  box(0.13, 0.13, 0.5, col, 0.2, -0.15, -0.25, arms);
-  box(0.09, 0.11, 0.62, 0x22262c, 0.1, -0.12, -0.45, arms);
-  const tag = makeTag(pi.name, team === 0 ? '#9cc7ff' : '#ffa3a3');
-  model.add(tag);
-  scene.add(model);
-  return { model, legL, legR, head, arms, tag, team, wasAlive: true, deadAt: 0, phase: 0, lx: 0, lz: 0 };
+  const m = makePlayerModel(pi.team, pi.name);
+  scene.add(m.root);
+  return { m, model: m.root, tag: m.tag, team: pi.team, wasAlive: true, deadAt: 0, lx: 0, lz: 0, stepN: 0 };
 }
 
-const remotes = new Map();
-
-function updateRemoteModel(r, x, y, z, yaw, pitch, alv, dt) {
-  const m = r.model;
+function updateRemoteModel(r, x, y, z, yaw, pitch, alv, weapon, dt, nowS) {
+  const m = r.m, root = r.model;
   const spd = Math.min(9, Math.hypot(x - r.lx, z - r.lz) / Math.max(dt, 0.001));
   r.lx = x; r.lz = z;
+  root.position.set(x, y, z);
+  root.rotation.y = yaw;
   if (alv) {
-    if (!r.wasAlive) { r.wasAlive = true; m.rotation.x = 0; }
-    m.visible = true;
-    m.position.set(x, y, z);
-    m.rotation.y = yaw;
-    r.head.rotation.x = clamp(pitch, -1, 1);
-    r.arms.rotation.x = clamp(pitch, -1.2, 1.2);
-    r.phase += spd * dt * 2.2;
-    const sw = Math.sin(r.phase) * 0.8 * Math.min(1, spd / 5);
-    r.legL.rotation.x = sw; r.legR.rotation.x = -sw;
+    if (!r.wasAlive) { r.wasAlive = true; m.revive(); }
+    root.visible = true;
+    m.setWeapon(clamp(weapon | 0, 0, S.WEAPONS.length - 1));
+    m.update(dt, spd, pitch, nowS);
     r.tag.visible = r.team === myTeam;
+    if (spd > 2) {
+      const n = Math.floor(m.phase / Math.PI);
+      if (n !== r.stepN) {
+        r.stepN = n;
+        const dist = Math.hypot(x - camPos.x, z - camPos.z);
+        if (dist < 22) audio.step(0.22, earPan(x, z), dist);
+      }
+    }
   } else {
     if (r.wasAlive) { r.wasAlive = false; r.deadAt = performance.now(); }
-    const age = performance.now() - r.deadAt;
-    m.position.set(x, y, z);
-    m.rotation.y = yaw;
-    m.rotation.x = 1.45 * Math.min(1, age / 350);
-    m.visible = age < 3000;
+    const age = (performance.now() - r.deadAt) / 1000;
+    m.setDead(age);
+    root.visible = age < 3.2;
     r.tag.visible = false;
   }
 }
 
 function updateRemotes(dt) {
   if (!buf.length) return;
+  const nowS = performance.now() / 1000;
   const rt = serverNow() - INTERP;
   let A = null, B = null;
   for (let i = buf.length - 1; i >= 0; i--) {
@@ -263,7 +243,7 @@ function updateRemotes(dt) {
       yaw = ra[4] + S.angDiff(rb[4], ra[4]) * f;
       pitch += (rb[5] - pitch) * f;
     }
-    updateRemoteModel(r, x, y, z, yaw, pitch, ra[6], dt);
+    updateRemoteModel(r, x, y, z, yaw, pitch, ra[6], ra[7], dt, nowS);
   }
   for (const [id, r] of remotes) {
     if (!seen.has(id)) { scene.remove(r.model); remotes.delete(id); }
@@ -276,192 +256,66 @@ function clearRemotes() {
 }
 
 // ---------- Оружие от первого лица ----------
-const vm = { kick: 0, bob: 0, swap: 0, rl: 0, flash: 0 };
-const vmRoot = new THREE.Group();
-vmScene.add(vmRoot);
+const vm = { kick: 0, bob: 0, swap: 0, flash: 0, cyc: -1, cycDur: 0.1, ads: 0, swx: 0, swy: 0, roll: 0, rlStart: 0, rlDur: 1, lookX: 0, lookY: 0 };
+let vmViews = [];
+let vmShown = false;
+const sleeveColor = (team) => (team === 0 ? 0x2a4f8a : 0x8e3029);
 
-function makeGun(i) {
-  const g = new THREE.Group();
-  const add = (w, h, d, c, x, y, z, rx = 0) => {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), lamb(c));
-    m.position.set(x, y, z); m.rotation.x = rx; g.add(m); return m;
-  };
-  const skin = 0xf1c9a5, sleeve = 0x3a4656, metal = 0x2a2e35, dark = 0x15171b, wood = 0x7a4f2b;
-  let tip;
-  if (i === 0) {
-    add(0.07, 0.09, 0.55, metal, 0, 0, -0.1);
-    add(0.025, 0.025, 0.3, dark, 0, 0.015, -0.5);
-    add(0.075, 0.07, 0.22, wood, 0, -0.005, -0.33);
-    add(0.06, 0.1, 0.22, wood, 0, -0.02, 0.3);
-    add(0.05, 0.16, 0.07, 0x1b1d22, 0, -0.12, -0.05, 0.25);
-    add(0.02, 0.04, 0.02, dark, 0, 0.065, -0.4);
-    add(0.08, 0.07, 0.12, skin, 0, -0.07, -0.35);
-    add(0.07, 0.09, 0.09, skin, 0, -0.1, 0.08);
-    add(0.1, 0.1, 0.4, sleeve, 0, -0.16, 0.3, -0.1);
-    tip = -0.68;
-  } else if (i === 1) {
-    add(0.05, 0.09, 0.25, metal, 0, 0, -0.05);
-    add(0.045, 0.04, 0.27, 0x8d949e, 0, 0.05, -0.06);
-    add(0.05, 0.13, 0.07, 0x1b1d22, 0, -0.1, 0.05, 0.25);
-    add(0.08, 0.09, 0.1, skin, 0, -0.1, 0.06);
-    add(0.1, 0.1, 0.4, sleeve, 0, -0.16, 0.3, -0.1);
-    tip = -0.2;
-  } else {
-    add(0.07, 0.09, 0.4, metal, 0, 0, 0.0);
-    add(0.04, 0.04, 0.7, dark, 0, 0.02, -0.45);
-    add(0.035, 0.035, 0.6, 0x3a3f47, 0, -0.03, -0.42);
-    add(0.075, 0.065, 0.2, wood, 0, -0.04, -0.4);
-    add(0.06, 0.1, 0.25, wood, 0, -0.03, 0.3);
-    add(0.08, 0.07, 0.12, skin, 0, -0.06, -0.4);
-    add(0.07, 0.09, 0.09, skin, 0, -0.1, 0.08);
-    add(0.1, 0.1, 0.4, sleeve, 0, -0.16, 0.3, -0.1);
-    tip = -0.82;
-  }
-  const fm = new THREE.MeshBasicMaterial({ color: 0xffd27a, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
-  const flash = new THREE.Group();
-  const p1 = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 0.2), fm);
-  const p2 = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 0.2), fm);
-  p2.rotation.y = Math.PI / 2;
-  flash.add(p1, p2);
-  flash.position.set(0, 0.015, tip);
-  flash.visible = false;
-  g.add(flash);
-  g.userData.flash = flash;
-  g.visible = false;
-  return g;
+function buildViewmodels() {
+  for (const v of vmViews) vmScene.remove(v.group);
+  vmViews = S.WEAPONS.map((_, i) => {
+    const v = buildViewmodel(i, sleeveColor(myTeam));
+    v.group.visible = false;
+    vmScene.add(v.group);
+    return v;
+  });
 }
-const guns = [0, 1, 2].map(makeGun);
-guns.forEach((g) => vmRoot.add(g));
+
+function reloadProgress() {
+  if (!(info.rl > 0)) return -1;
+  return clamp((performance.now() - vm.rlStart) / vm.rlDur, 0, 1);
+}
 
 function updateViewmodel(dt, speed) {
-  const show = joined && alive && !menuOpen;
-  vmRoot.visible = show;
-  if (!show) return;
-  guns.forEach((g, i) => { g.visible = i === selWeapon; });
-  vm.kick *= Math.exp(-dt * 16);
+  const scoped = scopeOn();
+  vmShown = joined && alive && !menuOpen && !scoped && vmViews.length > 0;
+  if (!vmViews.length) return;
+  vmViews.forEach((v, i) => { v.group.visible = vmShown && i === selWeapon; });
+  vm.kick *= Math.exp(-dt * 13);
   vm.bob += dt * speed * 1.5;
-  vm.swap = Math.max(0, vm.swap - dt * 4.5);
-  vm.rl += ((info.rl > 0 ? 1 : 0) - vm.rl) * Math.min(1, dt * 9);
-  const k = Math.min(1, speed / 6);
-  const bx = Math.sin(vm.bob) * 0.008 * k;
-  const by = Math.abs(Math.cos(vm.bob)) * 0.009 * k;
-  vmRoot.position.set(0.17 + bx, -0.17 + by - vm.rl * 0.17 - vm.swap * 0.3, -0.38 + vm.kick * 0.07);
-  vmRoot.rotation.set(vm.kick * 0.09 + vm.rl * 0.35, 0, -vm.rl * 0.25);
-  const fl = guns[selWeapon].userData.flash;
+  vm.swap = Math.max(0, vm.swap - dt * 4);
   vm.flash -= dt;
-  fl.visible = vm.flash > 0;
-  if (fl.visible) { fl.rotation.z = Math.random() * 6.28; const s = 0.8 + Math.random() * 0.6; fl.scale.set(s, s, s); }
-}
-
-// ---------- Трассеры и искры ----------
-const tracers = [];
-for (let i = 0; i < 24; i++) {
-  const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
-  const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0xffe9a8, transparent: true, opacity: 0.9 }));
-  line.visible = false; line.frustumCulled = false;
-  scene.add(line);
-  tracers.push({ line, life: 0 });
-}
-let tracerIdx = 0;
-const sparks = [];
-for (let i = 0; i < 24; i++) {
-  const m = new THREE.Mesh(new THREE.OctahedronGeometry(0.09), new THREE.MeshBasicMaterial({ color: 0xffd27a }));
-  m.visible = false;
-  scene.add(m);
-  sparks.push({ m, life: 0 });
-}
-let sparkIdx = 0;
-
-function spawnTracer(a, b) {
-  const t = tracers[tracerIdx++ % tracers.length];
-  const p = t.line.geometry.attributes.position;
-  p.setXYZ(0, a.x, a.y, a.z); p.setXYZ(1, b.x, b.y, b.z);
-  p.needsUpdate = true;
-  t.life = 0.07; t.line.visible = true;
-}
-function spawnSpark(v, hit) {
-  const s = sparks[sparkIdx++ % sparks.length];
-  s.m.position.copy(v);
-  s.m.material.color.setHex(hit ? 0xff4040 : 0xffd27a);
-  s.life = 0.2; s.m.visible = true;
-}
-function updateFx(dt) {
-  for (const t of tracers) {
-    if (t.life > 0) { t.life -= dt; if (t.life <= 0) t.line.visible = false; else t.line.material.opacity = Math.min(1, t.life / 0.07); }
+  vm.ads = adsAmt;
+  const tx = clamp(-vm.lookX * 0.45, -0.035, 0.035), ty = clamp(vm.lookY * 0.45, -0.03, 0.03);
+  vm.lookX = vm.lookY = 0;
+  vm.swx += (tx - vm.swx) * Math.min(1, dt * 10);
+  vm.swy += (ty - vm.swy) * Math.min(1, dt * 10);
+  if (vm.cyc !== -1) {
+    vm.cyc += dt / vm.cycDur;
+    if (vm.cyc > 1) vm.cyc = -1;
   }
-  for (const s of sparks) {
-    if (s.life > 0) { s.life -= dt; if (s.life <= 0) s.m.visible = false; else s.m.scale.setScalar(s.life / 0.2 + 0.2); }
-  }
+  if (!vmShown) return;
+  animateViewmodel(vmViews[selWeapon], {
+    kick: vm.kick, ads: adsAmt, rl: reloadProgress(), swap: vm.swap, bob: vm.bob, k: Math.min(1, speed / 6),
+    swx: vm.swx, swy: vm.swy, cyc: vm.cyc, flash: vm.flash, roll: vm.roll,
+  });
 }
 
-// ---------- Звук ----------
-let actx = null;
-let noiseBuf = null;
-function initAudio() {
-  try {
-    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
-    if (actx.state === 'suspended') actx.resume();
-    if (!noiseBuf) {
-      noiseBuf = actx.createBuffer(1, actx.sampleRate, actx.sampleRate);
-      const d = noiseBuf.getChannelData(0);
-      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-    }
-  } catch { /* звук недоступен */ }
-}
-function sink(pan) {
-  if (!actx.createStereoPanner) return actx.destination;
-  const p = actx.createStereoPanner();
-  p.pan.value = clamp(pan, -1, 1);
-  p.connect(actx.destination);
-  return p;
-}
-function playShot(w, vol = 1, pan = 0) {
-  if (!actx || !noiseBuf) return;
-  const t = actx.currentTime;
-  const out = sink(pan);
-  const src = actx.createBufferSource();
-  src.buffer = noiseBuf;
-  const lp = actx.createBiquadFilter();
-  lp.type = 'lowpass';
-  lp.frequency.value = w === 2 ? 1700 : w === 1 ? 2600 : 3300;
-  const g = actx.createGain();
-  g.gain.setValueAtTime(vol * (w === 2 ? 0.9 : 0.55), t);
-  g.gain.exponentialRampToValueAtTime(0.001, t + (w === 2 ? 0.35 : 0.17));
-  src.connect(lp); lp.connect(g); g.connect(out);
-  src.start(t, Math.random() * 0.5); src.stop(t + 0.4);
-  const o = actx.createOscillator();
-  o.frequency.setValueAtTime(w === 2 ? 120 : 170, t);
-  o.frequency.exponentialRampToValueAtTime(40, t + 0.12);
-  const og = actx.createGain();
-  og.gain.setValueAtTime(vol * 0.5, t);
-  og.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
-  o.connect(og); og.connect(out);
-  o.start(t); o.stop(t + 0.2);
-}
-function beep(freq, dur = 0.06, vol = 0.18, type = 'square') {
-  if (!actx) return;
-  const t = actx.currentTime;
-  const o = actx.createOscillator();
-  o.type = type; o.frequency.value = freq;
-  const g = actx.createGain();
-  g.gain.setValueAtTime(vol, t);
-  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-  o.connect(g); g.connect(actx.destination);
-  o.start(t); o.stop(t + dur + 0.02);
-}
-function thud() {
-  if (!actx || !noiseBuf) return;
-  const t = actx.currentTime;
-  const src = actx.createBufferSource();
-  src.buffer = noiseBuf;
-  const lp = actx.createBiquadFilter();
-  lp.type = 'lowpass'; lp.frequency.value = 400;
-  const g = actx.createGain();
-  g.gain.setValueAtTime(0.5, t);
-  g.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
-  src.connect(lp); lp.connect(g); g.connect(actx.destination);
-  src.start(t); src.stop(t + 0.25);
-}
+// ---------- Прицеливание, отдача, тряска ----------
+const BASE_FOV = 72;
+const SHAKE = [0.0030, 0.0022, 0.0090, 0.0020, 0.0130];
+let adsAmt = 0;
+let curFov = BASE_FOV;
+let shakeAmp = 0;
+let localBloom = 0;
+const recoil = { acc: 0, t: 0 };
+let killStreak = 0;
+let multi = { n: 0, t: 0 };
+let stepDist = 0;
+let wasGround = true;
+let lastVy = 0;
+
+const scopeOn = () => joined && alive && !menuOpen && selWeapon === 4 && adsAmt > 0.88;
 
 // ---------- HUD ----------
 const el = {
@@ -469,6 +323,8 @@ const el = {
   hpnum: $('hpnum'), hpfill: $('hpfill'), wname: $('wname'), ammo: $('ammo'), reload: $('reload'),
   prot: $('prot'), msg: $('msg'), hitm: $('hitm'), vig: $('dmgvig'), dir: $('dmgdir'),
   feed: $('killfeed'), sb: $('scoreboard'), crosshair: $('crosshair'),
+  scope: $('scope'), nums: $('dmgnums'), streak: $('streak'),
+  wb: S.WEAPONS.map((_, i) => $('wb' + i)),
 };
 let transientMsg = null;
 let gap = 8;
@@ -495,6 +351,7 @@ function updateHud() {
   el.hpfill.style.width = hp + '%';
   el.hpfill.style.background = hp > 50 ? 'linear-gradient(90deg,#22c55e,#86efac)' : hp > 25 ? 'linear-gradient(90deg,#f59e0b,#fde68a)' : 'linear-gradient(90deg,#dc2626,#fca5a5)';
   updateAmmo();
+  updateWbar();
   el.reload.classList.toggle('hidden', !(info.rl > 0));
   el.prot.classList.toggle('hidden', !info.prot);
 }
@@ -509,6 +366,13 @@ function updateAmmo() {
   sm.textContent = ` / ${res}`;
   el.ammo.appendChild(sm);
 }
+function updateWbar() {
+  for (let i = 0; i < el.wb.length; i++) {
+    const a = info.wp?.[i];
+    el.wb[i].classList.toggle('on', i === selWeapon);
+    el.wb[i].classList.toggle('empty', !!a && a[0] <= 0 && a[1] <= 0);
+  }
+}
 function fmtTime(sec) {
   const m = Math.floor(sec / 60), s = sec % 60;
   return `${m}:${String(s).padStart(2, '0')}`;
@@ -519,12 +383,48 @@ function addKill(d) {
   const row = document.createElement('div');
   row.className = 'k' + (d.k === myId || d.v === myId ? ' me' : '');
   const a = document.createElement('span'); a.className = 'c' + (k?.team ?? 0); a.textContent = k?.name || '?';
-  const mid = document.createElement('span'); mid.textContent = ` ${WEAPON_ICON[d.w] || '🔫'}${d.hs ? '🎯' : ''} `;
+  const mid = document.createElement('span');
+  mid.textContent = ` [${S.WEAPONS[d.w]?.short || '?'}${d.hs ? ' 🎯' : ''}${d.d >= 5 ? ' ' + d.d + 'м' : ''}] `;
   const b = document.createElement('span'); b.className = 'c' + (v?.team ?? 1); b.textContent = v?.name || '?';
   row.append(a, mid, b);
   el.feed.appendChild(row);
   while (el.feed.children.length > 5) el.feed.firstChild.remove();
   setTimeout(() => row.remove(), 5000);
+}
+
+function showDamage(d) {
+  if (!d.d) return;
+  const n = document.createElement('div');
+  n.className = 'n' + (d.k ? ' k' : d.hs ? ' hs' : '');
+  n.textContent = String(d.d);
+  n.style.setProperty('--dx', `${Math.round((Math.random() - 0.3) * 60)}px`);
+  n.style.left = `${Math.round((Math.random() - 0.5) * 30 + 14)}px`;
+  n.style.top = `${Math.round(-30 - Math.random() * 16)}px`;
+  el.nums.appendChild(n);
+  while (el.nums.children.length > 8) el.nums.firstChild.remove();
+  setTimeout(() => n.remove(), 800);
+}
+let streakTimer = 0;
+function banner(text) {
+  el.streak.textContent = text;
+  el.streak.classList.remove('on');
+  void el.streak.offsetWidth;
+  el.streak.classList.add('on');
+  clearTimeout(streakTimer);
+  streakTimer = setTimeout(() => el.streak.classList.remove('on'), 1700);
+}
+const MULTI = ['', '', 'ДВОЙНОЕ УБИЙСТВО', 'ТРОЙНОЕ УБИЙСТВО', 'КВАДРО-УБИЙСТВО', 'РЕЗНЯ'];
+function onMyKill(d) {
+  const now = performance.now();
+  killStreak++;
+  multi.n = now - multi.t < 4000 ? multi.n + 1 : 1;
+  multi.t = now;
+  audio.kill(killStreak);
+  const v = roster.get(d.v);
+  if (multi.n >= 2) { banner(MULTI[Math.min(5, multi.n)]); audio.streak(multi.n); }
+  else if (killStreak === 5 || killStreak === 10 || killStreak === 15) { banner(`СЕРИЯ ×${killStreak}`); audio.streak(4); }
+  else if (d.hs) banner('В ГОЛОВУ!');
+  flashMsg('', `Вы убили: ${v?.name || '?'}${d.d >= 5 ? ` · ${d.d} м` : ''}`, 1500);
 }
 
 function buildScoreboard() {
@@ -586,6 +486,8 @@ function ensureSocket() {
     setRoster(d.players);
     resetNetState();
     joined = true;
+    buildViewmodels();
+    killStreak = 0; multi = { n: 0, t: 0 };
     $('playBtn').disabled = false;
     $('hud').classList.remove('hidden');
     $('touch').classList.remove('hidden');
@@ -601,8 +503,8 @@ function ensureSocket() {
     el.hitm.classList.toggle('hs', !!d.hs);
     el.hitm.classList.add('on');
     setTimeout(() => el.hitm.classList.remove('on'), 90);
-    beep(d.hs ? 1900 : 1250, 0.06, 0.2);
-    if (d.k) setTimeout(() => beep(900, 0.09, 0.2), 90);
+    audio.hit(!!d.hs);
+    showDamage(d);
   });
   socket.on('hurt', (d) => {
     el.vig.classList.add('on');
@@ -612,14 +514,15 @@ function ensureSocket() {
     el.dir.style.transform = `rotate(${-rel}rad)`;
     el.dir.classList.add('on');
     setTimeout(() => el.dir.classList.remove('on'), 60);
-    thud();
+    audio.hurt();
+    shakeAmp = Math.max(shakeAmp, 0.012);
   });
   socket.on('kill', (d) => {
     addKill(d);
-    if (d.k === myId) {
-      const v = roster.get(d.v);
-      flashMsg('', `Вы убили: ${v?.name || '?'}${d.hs ? ' 🎯' : ''}`, 1500);
-    }
+    const vr = remotes.get(d.v);
+    if (vr) fx.death(vr.model.position.x, vr.model.position.y, vr.model.position.z);
+    if (d.v === myId) { killStreak = 0; multi = { n: 0, t: 0 }; }
+    if (d.k === myId) onMyKill(d);
   });
   socket.on('over', (d) => showEnd(d));
   socket.on('start', () => { $('endscreen').classList.add('hidden'); matchState = 0; syncScoreboard(); flashMsg('Новый матч!', '', 2000); });
@@ -634,6 +537,7 @@ function ensureSocket() {
 function resetNetState() {
   buf.length = 0; pending.length = 0; lastSnap = null; clockInit = false;
   clearRemotes();
+  fx.clear();
   alive = false;
 }
 
@@ -656,14 +560,22 @@ function onSnap(s) {
 
   const m = s.me;
   const wasAlive = alive;
+  const prevRl = info.rl || 0;
   alive = !!m.alive;
   info = m;
+  if (alive && m.rl > 0 && !(prevRl > 0)) {
+    const wr = S.WEAPONS[m.w] || S.WEAPONS[0];
+    vm.rlDur = wr.reload * 1000;
+    vm.rlStart = performance.now() - (wr.reload - m.rl) * 1000;
+    audio.reload(m.w, m.rl);
+  }
 
   if (alive) {
     if (!wasAlive) {
       pending.length = 0;
       selWeapon = m.w;
       vm.swap = 1;
+      adsAmt = 0; input.ads = false; localBloom = 0; recoil.acc = 0;
     }
     const px = me.x, pz = me.z;
     me.x = m.x; me.y = m.y; me.z = m.z; me.vx = m.vx; me.vy = m.vy; me.vz = m.vz; me.onGround = !!m.g;
@@ -674,6 +586,9 @@ function onSnap(s) {
     deathAt = performance.now();
     pending.length = 0;
     input.fireHeld = false;
+    input.ads = false;
+    shakeAmp = Math.max(shakeAmp, 0.02);
+    audio.die();
   }
 
   el.s0.textContent = s.sc[0];
@@ -700,25 +615,46 @@ function updateEndCountdown(s) {
 }
 
 function onShot(d) {
-  const o = new THREE.Vector3(d.o[0], d.o[1], d.o[2]);
+  const w = S.WEAPONS[d.w] || S.WEAPONS[0];
+  const own = d.id === myId;
+  const ox = d.o[0], oy = d.o[1], oz = d.o[2];
+  const b = basis();
+  let whizD = 99, whizSide = 0;
   for (const e of d.e) {
-    const end = new THREE.Vector3(e[0], e[1], e[2]);
-    const dir = end.clone().sub(o);
-    const len = dir.length();
+    let dx = e[0] - ox, dy = e[1] - oy, dz = e[2] - oz;
+    const len = Math.hypot(dx, dy, dz);
     if (len < 0.01) continue;
-    dir.normalize();
-    const right = new THREE.Vector3().crossVectors(dir, new THREE.Vector3(0, 1, 0)).normalize();
-    const start = o.clone().addScaledVector(dir, 0.8).addScaledVector(right, 0.14);
-    start.y -= 0.18;
-    spawnTracer(start, end);
-    if (len < 149) spawnSpark(end, e[3]);
+    dx /= len; dy /= len; dz /= len;
+    let sx, sy, sz;
+    if (own) {
+      const k = 1 - adsAmt;
+      sx = camPos.x + b.fx * 0.9 + b.rx * 0.15 * k + b.ux * -0.12 * k;
+      sy = camPos.y + b.fy * 0.9 + b.uy * -0.12 * k;
+      sz = camPos.z + b.fz * 0.9 + b.rz * 0.15 * k + b.uz * -0.12 * k;
+    } else {
+      // примерно у дула модели противника
+      const rx = -dz, rz = dx, rl = Math.hypot(rx, rz) || 1;
+      sx = ox + dx * 0.9 + (rx / rl) * 0.18; sy = oy - 0.27 + dy * 0.9; sz = oz + dz * 0.9 + (rz / rl) * 0.18;
+    }
+    fx.tracer({ x: sx, y: sy, z: sz }, { x: e[0], y: e[1], z: e[2] });
+    if (len < w.range - 1) {
+      if (e[3]) fx.blood(e[0], e[1], e[2], dx, dy, dz, false);
+      else fx.impact(e[0], e[1], e[2], dx, dy, dz, d.w === 4 ? 1.6 : d.w === 2 ? 0.8 : 1);
+    }
+    if (!own) { // близкий пролёт пули
+      const t = clamp((camPos.x - ox) * dx + (camPos.y - oy) * dy + (camPos.z - oz) * dz, 0, len);
+      const qx = ox + dx * t - camPos.x, qy = oy + dy * t - camPos.y, qz = oz + dz * t - camPos.z;
+      const dist = Math.hypot(qx, qy, qz);
+      if (dist < whizD) { whizD = dist; whizSide = qx * b.rx + qz * b.rz; }
+    }
   }
-  if (d.id !== myId && actx) {
-    const dx = o.x - camera.position.x, dz = o.z - camera.position.z;
-    const dist = Math.hypot(dx, dz);
-    const vol = clamp(1 / (1 + dist / 10), 0.05, 1);
-    const pan = dist > 0.1 ? (dx * Math.cos(view.yaw) - dz * Math.sin(view.yaw)) / dist : 0;
-    playShot(d.w, vol, pan);
+  if (!own) {
+    const r = remotes.get(d.id);
+    r?.m.fire();
+    const dist = Math.hypot(ox - camPos.x, oy - camPos.y, oz - camPos.z);
+    const vol = clamp(1 / (1 + dist / 12), 0.06, 1);
+    audio.shot(d.w, vol, earPan(ox, oz), dist);
+    if (whizD < 2.8) audio.whiz(clamp(whizSide, -1, 1), (1 - whizD / 2.8) * 0.8);
   }
 }
 
@@ -738,7 +674,7 @@ function readInput() {
   input.reloadLatch = false;
   return {
     seq: 0, mx: +clamp(mx, -1, 1).toFixed(3), mz: +clamp(mz, -1, 1).toFixed(3),
-    yaw: view.yaw, pitch: view.pitch, jump, fire, reload, weapon: selWeapon, rt: Math.round(serverNow() - INTERP),
+    yaw: view.yaw, pitch: view.pitch, jump, fire, reload, weapon: selWeapon, ads: !!(active && input.ads), rt: Math.round(serverNow() - INTERP),
   };
 }
 
@@ -754,16 +690,28 @@ function simStep() {
 }
 
 function applyLook(dx, dy, mult) {
-  view.yaw = S.wrapAngle(view.yaw - dx * mult * sens);
-  view.pitch = clamp(view.pitch - dy * mult * sens, -1.5, 1.5);
+  const z = Math.max(0.25, curFov / BASE_FOV); // в прицеле чувствительность ниже
+  view.yaw = S.wrapAngle(view.yaw - dx * mult * sens * z);
+  view.pitch = clamp(view.pitch - dy * mult * sens * z, -1.5, 1.5);
+  vm.lookX += dx * mult * z; vm.lookY += dy * mult * z;
 }
 
 function changeWeapon(i) {
-  if (i === selWeapon || i < 0 || i >= S.WEAPONS.length) return;
+  if (i === selWeapon || i < 0 || i >= S.WEAPONS.length || !joined || !alive) return;
   selWeapon = i;
-  vm.swap = 1;
+  vm.swap = 1; vm.cyc = -1;
+  input.ads = false;
+  localBloom = 0;
   localNextFire = performance.now() / 1000 + 0.35;
+  audio.swap();
   updateAmmo();
+  updateWbar();
+}
+
+function setAds(on) {
+  if (!!on === input.ads) return;
+  input.ads = !!on;
+  if (on) audio.ads();
 }
 
 // локальные эффекты выстрела (мгновенный отклик; урон считает сервер)
@@ -775,12 +723,31 @@ function localFireUpdate(nowS) {
   if (!want) return;
   const a = info.wp?.[selWeapon];
   if (!a || info.rl > 0 || nowS < localNextFire || matchState === 1) return;
-  if (a[0] <= 0) { if (nowS > localNextFire) { beep(300, 0.04, 0.12); localNextFire = nowS + 0.25; } return; }
+  if (a[0] <= 0) { if (nowS > localNextFire) { audio.empty(); localNextFire = nowS + 0.25; } return; }
   a[0]--;
   localNextFire = nowS + w.rate;
-  vm.kick = 1; vm.flash = 0.05;
-  playShot(selWeapon, 1, 0);
-  view.pitch = clamp(view.pitch + (selWeapon === 2 ? 0.05 : selWeapon === 1 ? 0.012 : 0.004), -1.5, 1.5);
+  vm.kick = 1; vm.flash = 0.05; vm.roll = (Math.random() - 0.5) * 0.25;
+  const ud = vmViews[selWeapon]?.ud;
+  const slow = !!ud && (ud.type === 'bolt' || ud.type === 'shell');
+  vm.cycDur = slow ? Math.max(0.3, w.rate * 0.7) : 0.07;
+  vm.cyc = 0;
+  audio.shot(selWeapon, 0.85, 0, 0);
+  const k = adsAmt;
+  // отдача: подбрасывание вверх и лёгкий увод, потом камера частично возвращается
+  const up = w.kick[0] * (0.85 + Math.random() * 0.3) * (1 - k * 0.4);
+  view.pitch = clamp(view.pitch + up, -1.5, 1.5);
+  view.yaw = S.wrapAngle(view.yaw + (Math.random() - 0.5) * 2 * w.kick[1] * (1 - k * 0.4));
+  recoil.acc += up * 0.7; recoil.t = nowS;
+  shakeAmp = Math.max(shakeAmp, SHAKE[selWeapon] * (1 - k * 0.5));
+  localBloom = Math.min(w.bloomMax, localBloom + w.bloom);
+  // гильза и дымок
+  const b = basis();
+  const kk = 1 - k;
+  const mx = camPos.x + b.fx * 0.55 + b.rx * 0.13 * kk, my = camPos.y + b.fy * 0.55 + b.uy * -0.07 * kk, mz = camPos.z + b.fz * 0.55 + b.rz * 0.13 * kk;
+  const sp = 1.6 + Math.random() * 0.8;
+  fx.casing(mx, my, mz,
+    b.rx * sp + b.ux * 0.4 - b.fx * 0.3 + me.vx * 0.5, 1.3 + Math.random() * 0.8, b.rz * sp + b.uz * 0.4 - b.fz * 0.3 + me.vz * 0.5, selWeapon === 2);
+  if (Math.random() < 0.6) fx.smoke(camPos.x + b.fx * 1.1 + b.rx * 0.1 * kk, camPos.y + b.fy * 1.1 - 0.08 * kk, camPos.z + b.fz * 1.1 + b.rz * 0.1 * kk, selWeapon === 4 ? 1.8 : 1);
   updateAmmo();
 }
 
@@ -791,7 +758,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'Tab') { e.preventDefault(); syncScoreboard(); }
   if (e.code === 'KeyR' && !e.repeat) input.reloadLatch = true;
   if (e.code === 'Space') e.preventDefault();
-  if (/^Digit[1-3]$/.test(e.code)) changeWeapon(+e.code.slice(5) - 1);
+  if (/^Digit[1-5]$/.test(e.code)) changeWeapon(+e.code.slice(5) - 1);
 });
 window.addEventListener('keyup', (e) => {
   keys[e.code] = false;
@@ -801,10 +768,15 @@ window.addEventListener('blur', releaseInputs);
 document.addEventListener('visibilitychange', () => { if (document.hidden) releaseInputs(); });
 window.addEventListener('contextmenu', (e) => e.preventDefault());
 window.addEventListener('mousedown', (e) => {
-  if (isTouch || !locked || e.button !== 0) return;
+  if (isTouch || !locked) return;
+  if (e.button === 2) { setAds(true); return; }
+  if (e.button !== 0) return;
   input.fireHeld = true; input.fireLatch = true; input.localTap = true;
 });
-window.addEventListener('mouseup', (e) => { if (e.button === 0) input.fireHeld = false; });
+window.addEventListener('mouseup', (e) => {
+  if (e.button === 0) input.fireHeld = false;
+  if (e.button === 2) setAds(false);
+});
 window.addEventListener('mousemove', (e) => { if (locked && !menuOpen) applyLook(e.movementX, e.movementY, 0.0022); });
 window.addEventListener('wheel', (e) => {
   if (!locked) return;
@@ -891,7 +863,10 @@ function hold(btn, on, off) {
 }
 hold($('bJump'), () => { input.jumpBtn = true; }, () => { input.jumpBtn = false; });
 hold($('bReload'), () => { input.reloadLatch = true; });
-hold($('bWeapon'), () => changeWeapon((selWeapon + 1) % S.WEAPONS.length));
+hold($('bAds'), () => setAds(!input.ads));
+el.wb.forEach((b, i) => {
+  b.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation?.(); if (!menuOpen) changeWeapon(i); });
+});
 hold($('bScore'), () => { sbPinned = !sbPinned; syncScoreboard(); });
 hold($('bMenu'), () => openMenu());
 
@@ -899,7 +874,7 @@ document.addEventListener('touchmove', (e) => { if (e.target?.closest?.('.card')
 
 function releaseInputs() {
   for (const k of Object.keys(keys)) keys[k] = false;
-  input.fireHeld = false; input.fireLatch = false; input.jumpBtn = false; input.localTap = false;
+  input.fireHeld = false; input.fireLatch = false; input.jumpBtn = false; input.localTap = false; input.ads = false;
   joy.id = null; joy.x = joy.y = 0; look.id = null; fireTouch.id = null;
   resetJoyVisual();
 }
@@ -952,7 +927,7 @@ $('fsBtn').addEventListener('click', () => toggleFullscreen());
 hold($('bFull'), () => toggleFullscreen());
 
 $('playBtn').addEventListener('click', () => {
-  initAudio();
+  audio.init();
   toggleFullscreen(true);
   if (joined) { closeMenu(); lockPointer(); return; }
   wantJoin = true;
@@ -967,7 +942,7 @@ let lockShown = false;
 function updateTargetLock() {
   let hit = false;
   if (joined && alive && !menuOpen) {
-    const ox = camera.position.x, oy = camera.position.y, oz = camera.position.z;
+    const ox = camPos.x, oy = camPos.y, oz = camPos.z;
     const cp = Math.cos(view.pitch);
     const dx = -Math.sin(view.yaw) * cp, dy = Math.sin(view.pitch), dz = -Math.cos(view.yaw) * cp;
     for (const r of remotes.values()) {
@@ -980,13 +955,34 @@ function updateTargetLock() {
   if (hit !== lockShown) { lockShown = hit; el.crosshair.classList.toggle('lock', hit); }
 }
 
+// ---------- Прицеливание / отдача ----------
+function updateAds(dt, nowS) {
+  const want = joined && alive && !menuOpen && input.ads ? 1 : 0;
+  const rate = selWeapon === 4 ? 8 : 11;
+  adsAmt += (want - adsAmt) * Math.min(1, dt * rate);
+  if (Math.abs(want - adsAmt) < 0.003) adsAmt = want;
+  const w = S.WEAPONS[selWeapon];
+  const t = adsAmt * adsAmt * (3 - 2 * adsAmt);
+  curFov = BASE_FOV + (w.zoom - BASE_FOV) * t;
+  // возврат камеры после очереди
+  if (recoil.acc > 0.0001 && nowS - recoil.t > 0.09) {
+    const r = Math.min(recoil.acc, recoil.acc * dt * 5 + dt * 0.015);
+    view.pitch -= r; recoil.acc -= r;
+  }
+  localBloom = Math.max(0, localBloom - 0.05 * dt);
+  shakeAmp *= Math.exp(-dt * 16);
+}
+
 // ---------- Камера и цикл ----------
 let bobT = 0;
+let lastFov = 0;
 function updateCamera(dt) {
   if (!joined) {
     const t = performance.now() / 1000 * 0.12;
-    camera.position.set(Math.cos(t) * 36, 14, Math.sin(t) * 26);
+    camPos.x = Math.cos(t) * 36; camPos.y = 14; camPos.z = Math.sin(t) * 26;
+    camera.position.set(camPos.x, camPos.y, camPos.z);
     camera.lookAt(0, 2, 0);
+    if (lastFov !== BASE_FOV) { camera.fov = BASE_FOV; camera.updateProjectionMatrix(); lastFov = BASE_FOV; }
     return 0;
   }
   const a = acc / S.DT;
@@ -996,14 +992,26 @@ function updateCamera(dt) {
   const speed = Math.hypot(me.vx, me.vz);
   if (alive) {
     bobT += dt * speed * 1.5;
-    const bob = me.onGround ? Math.sin(bobT * 2) * 0.025 * Math.min(1, speed / 6) : 0;
-    camera.position.set(px, py + S.PLAYER.eye + bob, pz);
-    camera.rotation.set(view.pitch, view.yaw, 0);
+    const bob = me.onGround ? Math.sin(bobT * 2) * 0.025 * Math.min(1, speed / 6) * (1 - adsAmt * 0.8) : 0;
+    camPos.x = px; camPos.y = py + S.PLAYER.eye + bob; camPos.z = pz;
+    camera.position.set(camPos.x, camPos.y, camPos.z);
+    const sh = shakeAmp;
+    camera.rotation.set(view.pitch + (Math.random() - 0.5) * sh, view.yaw + (Math.random() - 0.5) * sh, (Math.random() - 0.5) * sh * 0.6);
+    // шаги и приземление
+    if (me.onGround) {
+      stepDist += speed * dt;
+      if (speed > 1.5 && stepDist > 2.2) { stepDist = 0; audio.step(0.18 * (1 - adsAmt * 0.4)); }
+      if (!wasGround && lastVy < -4) { audio.land(clamp(-lastVy / 14, 0.2, 0.7)); shakeAmp = Math.max(shakeAmp, 0.006); }
+    }
+    wasGround = me.onGround; lastVy = me.vy;
   } else {
     const k = Math.min(1, (performance.now() - deathAt) / 600);
-    camera.position.set(px, py + S.PLAYER.eye * (1 - k) + 0.25 * k, pz);
+    camPos.x = px; camPos.y = py + S.PLAYER.eye * (1 - k) + 0.25 * k; camPos.z = pz;
+    camera.position.set(camPos.x, camPos.y, camPos.z);
     camera.rotation.set(view.pitch * (1 - k * 0.5), view.yaw, k * 0.7);
   }
+  const fov = alive ? curFov : BASE_FOV;
+  if (Math.abs(fov - lastFov) > 0.01) { camera.fov = fov; camera.updateProjectionMatrix(); lastFov = fov; }
   return speed;
 }
 
@@ -1027,23 +1035,32 @@ function frame(nowMs) {
   while (acc >= S.DT && steps < 5) { simStep(); acc -= S.DT; steps++; }
   if (steps >= 5) acc = 0;
 
+  updateAds(dt, nowMs / 1000);
   localFireUpdate(nowMs / 1000);
   updateRemotes(dt);
   const speed = updateCamera(dt);
   updateViewmodel(dt, speed);
-  updateFx(dt);
+  fx.update(dt, camPos);
   updateTargetLock();
 
-  // прицел «дышит» от движения и стрельбы
-  const g = 6 + speed * 1.3 + vm.kick * 8 + (me.onGround ? 0 : 6);
-  gap += (g - gap) * Math.min(1, dt * 14);
+  // прицел: зазор соответствует реальному разбросу оружия
+  const w = S.WEAPONS[selWeapon];
+  const bl = Math.max(info.bl || 0, localBloom);
+  const hs = Math.hypot(me.vx, me.vz);
+  const spreadRad = (w.spread + bl) * (1 + hs * 0.12) * (1 + (w.adsMul - 1) * adsAmt) + (me.onGround ? 0 : 0.03);
+  const px = Math.tan(spreadRad) / Math.tan((curFov * Math.PI) / 360) * (window.innerHeight / 2);
+  const g = clamp(px + 3, 4, 90);
+  gap += (g - gap) * Math.min(1, dt * 16);
+  const scoped = scopeOn();
   el.crosshair.style.setProperty('--g', gap.toFixed(1) + 'px');
-  el.crosshair.style.display = joined && alive ? '' : 'none';
+  el.crosshair.style.display = joined && alive && !scoped ? '' : 'none';
+  el.crosshair.style.opacity = String(1 - adsAmt * 0.6);
+  el.scope.classList.toggle('hidden', !scoped);
   el.prot.classList.toggle('hidden', !(info.prot && alive));
 
   renderer.clear();
   renderer.render(scene, camera);
-  if (vmRoot.visible) {
+  if (vmShown) {
     renderer.clearDepth();
     renderer.render(vmScene, vmCam);
   }
@@ -1058,4 +1075,11 @@ window.__arena = {
   get info() { return info; },
   get pending() { return pending.length; },
   get weapon() { return selWeapon; },
+  get ads() { return adsAmt; },
+  get fov() { return curFov; },
+  get streak() { return killStreak; },
+  fx, audio, scene, vmScene,
+  get vmPos() { const v = vmViews[selWeapon]; return v ? v.group.position : null; },
+  get vmShown() { return vmShown; },
+  get scoped() { return scopeOn(); },
 };

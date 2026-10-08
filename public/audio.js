@@ -189,14 +189,18 @@ export function createAudio() {
     burst(out, t, 0.09, 'bandpass', 2800, 1200, 1.4, 0.5);
   };
 
-  A.hit = (head = false) => {
+  // zone: 0 — ноги (глухо), 1 — туловище, 2 — голова (звонко)
+  A.hit = (zone = 1) => {
     if (!ctx) return;
     const t = ctx.currentTime;
     const out = bus(0); out.gain.value = 1;
-    if (head) {
+    if (zone === 2) {
       tone(out, t, 0.14, 2600, 2400, 'sine', 0.22);
       tone(out, t, 0.16, 3900, 3700, 'sine', 0.12);
       tone(out, t, 0.05, 1400, 900, 'square', 0.1);
+    } else if (zone === 0) {
+      tone(out, t, 0.06, 760, 600, 'square', 0.14);
+      tone(out, t, 0.05, 420, 300, 'sine', 0.14);
     } else {
       tone(out, t, 0.05, 1300, 1000, 'square', 0.16);
       tone(out, t, 0.03, 2000, 1500, 'sine', 0.1);

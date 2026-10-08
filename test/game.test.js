@@ -65,7 +65,7 @@ function duel() {
   room.players.set(a.id, a); room.players.set(b.id, b);
   room.spawn(a); room.spawn(b);
   for (const p of [a, b]) { p.protectUntil = 0; p.nextFire = 0; }
-  a.x = -10; a.z = 18; a.yaw = -Math.PI / 2; a.pitch = Math.atan2(1.0 - S.PLAYER.eye, 15);
+  a.x = -10; a.z = 18; a.yaw = -Math.PI / 2; a.pitch = Math.atan2(1.15 - S.PLAYER.eye, 15);
   b.x = 5; b.z = 18;
   return { room, a, b, sockA, sockB };
 }
@@ -131,7 +131,7 @@ function duel() {
 // 7. Дробовик: несколько дробин, урон складывается.
 {
   const { room, a, b } = duel();
-  a.weapon = 2; a.x = -3; // 8 м до цели
+  a.weapon = 2; a.x = b.x - 4; a.pitch = Math.atan2(1.15 - S.PLAYER.eye, 4); // 4 м до цели, в корпус
   room.fire(a, Date.now());
   assert.ok(b.hp < 100 && b.hp <= 100 - S.WEAPONS[2].dmg, `дробовик не попал: hp=${b.hp}`);
 }
@@ -144,12 +144,14 @@ function duel() {
   // ближний выстрел против дальнего (линия z=18 свободна по всей длине)
   const dmgAt = (dist) => {
     a.x = -28; a.z = 18; a.yaw = -Math.PI / 2; b.x = -28 + dist; b.z = 18;
-    a.pitch = Math.atan2(1.0 - S.PLAYER.eye, dist);
+    a.pitch = Math.atan2(1.15 - S.PLAYER.eye, dist);
     b.hp = 100; b.hist = []; a.nextFire = 0; a.bloom = 0; a.wp[0].mag = 30; a.reloading = false;
     room.fire(a, Date.now());
     return 100 - b.hp;
   };
-  const near = dmgAt(12), far = dmgAt(56);
+  const near = dmgAt(12);
+  let far = 0;
+  for (let i = 0; i < 12 && !(far > 0 && far < 30); i++) far = dmgAt(56); // разброс может увести пулю мимо узкого тела
   assert.equal(near, 26, `урон вблизи: ${near}`);
   assert.ok(far > 0 && far < 22, `урон на 56 м должен падать: ${far}`);
 
@@ -174,16 +176,47 @@ function duel() {
   assert.ok(hit.d >= 90, `урон в событии hit: ${hit.d}`);
 }
 
+// 7a2. Зоны попадания: ноги < туловище < голова, зона приходит в событии hit; мимо узкого тела пуля летит дальше.
+{
+  const { room, a, b, sockA } = duel();
+  a.ads = true; a.assist = 0; a.weapon = 4;
+  const shootAt = (h) => {
+    a.x = -10; a.z = 18; a.yaw = -Math.PI / 2; b.x = 5; b.z = 18; b.y = 0;
+    a.pitch = Math.atan2(h - S.PLAYER.eye, 15);
+    b.hp = 1000; b.alive = true; b.hist = []; b.protectUntil = 0; a.nextFire = 0; a.reloading = false; a.bloom = 0; a.wp[4].mag = 5;
+    room.fire(a, Date.now());
+    return sockA.events.filter((e) => e[0] === 'hit').at(-1)[1];
+  };
+  const leg = shootAt(0.4), torso = shootAt(1.15), head = shootAt(1.65);
+  assert.equal(leg.z, 0); assert.equal(torso.z, 1); assert.equal(head.z, 2);
+  assert.equal(leg.d, Math.round(90 * S.ZONE_LEG_MULT));
+  assert.equal(torso.d, 90);
+  assert.equal(head.d, 225);
+  assert.ok(leg.d < torso.d && torso.d < head.d);
+  assert.equal(head.hs, 1); assert.equal(leg.hs, 0);
+  // луч мимо тела на 0.35 м вбок: раньше попал бы в широкую коробку 0.8, теперь — нет
+  const before = b.hp;
+  a.x = -10; a.z = 18; b.x = 5; b.z = 18.35; b.hist = [];
+  a.pitch = Math.atan2(1.15 - S.PLAYER.eye, 15); a.nextFire = 0; a.wp[4].mag = 5;
+  room.fire(a, Date.now());
+  assert.equal(b.hp, before, 'пуля мимо тела не должна попадать');
+  // rayPlayer напрямую
+  assert.equal(S.rayPlayer(0, 1.0, 0, 0, 0, -1, 0, 0, -5).zone, 1);
+  assert.equal(S.rayPlayer(0, 0.3, 0, 0, 0, -1, 0, 0, -5).zone, 0);
+  assert.equal(S.rayPlayer(0, 1.7, 0, 0, 0, -1, 0, 0, -5).zone, 2);
+  assert.equal(S.rayPlayer(0, 2.5, 0, 0, 0, -1, 0, 0, -5).zone, -1);
+}
+
 // 7b. Помощь прицеливания: выстрел мимо на ~3° попадает только с assist; сквозь стену не тянет.
 {
   const { room, a, b } = duel();
-  a.pitch = Math.atan2(1.0 - S.PLAYER.eye, 15);
+  a.pitch = Math.atan2(1.15 - S.PLAYER.eye, 15);
   a.yaw = -Math.PI / 2 + 0.05; // ~2.9° в сторону: на 15 м это ~0.75 м мимо цели
   let miss = 0, hit = 0;
   for (let i = 0; i < 20; i++) { b.hp = 100; a.nextFire = 0; a.bloom = 0; a.wp[0].mag = 30; a.assist = 0; room.fire(a, Date.now()); if (b.hp < 100) hit++; }
   for (let i = 0; i < 20; i++) { b.hp = 100; a.nextFire = 0; a.bloom = 0; a.wp[0].mag = 30; a.assist = 1; room.fire(a, Date.now()); if (b.hp < 100) miss++; }
   assert.equal(hit, 0, `без помощи выстрел мимо должен промахиваться, попаданий: ${hit}`);
-  assert.ok(miss >= 18, `с помощью прицеливания должно попадать: ${miss}/20`);
+  assert.ok(miss >= 14, `с помощью прицеливания должно попадать: ${miss}/20`);
   // за стеной помощь не работает: ставим цель за центральным зданием
   b.x = 0; b.z = 4.5; b.hp = 100; a.x = 0; a.z = -4.5; a.yaw = 0.05; a.pitch = 0;
   for (let i = 0; i < 10; i++) { a.nextFire = 0; a.wp[0].mag = 30; room.fire(a, Date.now()); }

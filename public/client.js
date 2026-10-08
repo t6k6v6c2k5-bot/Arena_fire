@@ -395,7 +395,7 @@ function addKill(d) {
 function showDamage(d) {
   if (!d.d) return;
   const n = document.createElement('div');
-  n.className = 'n' + (d.k ? ' k' : d.hs ? ' hs' : '');
+  n.className = 'n' + (d.k ? ' k' : d.hs ? ' hs' : d.z === 0 ? ' lg' : '');
   n.textContent = String(d.d);
   n.style.setProperty('--dx', `${Math.round((Math.random() - 0.3) * 60)}px`);
   n.style.left = `${Math.round((Math.random() - 0.5) * 30 + 14)}px`;
@@ -501,9 +501,10 @@ function ensureSocket() {
   socket.on('shot', onShot);
   socket.on('hit', (d) => {
     el.hitm.classList.toggle('hs', !!d.hs);
+    el.hitm.classList.toggle('lg', d.z === 0);
     el.hitm.classList.add('on');
     setTimeout(() => el.hitm.classList.remove('on'), 90);
-    audio.hit(!!d.hs);
+    audio.hit(d.z ?? (d.hs ? 2 : 1));
     showDamage(d);
   });
   socket.on('hurt', (d) => {
@@ -638,7 +639,7 @@ function onShot(d) {
     }
     fx.tracer({ x: sx, y: sy, z: sz }, { x: e[0], y: e[1], z: e[2] });
     if (len < w.range - 1) {
-      if (e[3]) fx.blood(e[0], e[1], e[2], dx, dy, dz, false);
+      if (e[3]) fx.blood(e[0], e[1], e[2], dx, dy, dz, e[4] === 2);
       else fx.impact(e[0], e[1], e[2], dx, dy, dz, d.w === 4 ? 1.6 : d.w === 2 ? 0.8 : 1);
     }
     if (!own) { // близкий пролёт пули

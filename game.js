@@ -234,7 +234,6 @@ class Room {
 
     const dmgTo = new Map();
     const ends = [];
-    const hw = S.PLAYER.hw, H = S.PLAYER.h;
     for (let i = 0; i < w.pellets; i++) {
       const a = Math.random() * Math.PI * 2;
       const rr = Math.sqrt(Math.random()) * spread;
@@ -244,42 +243,44 @@ class Room {
       dx /= dl; dy /= dl; dz /= dl;
 
       let dist = S.rayWorld(ox, oy, oz, dx, dy, dz, w.range);
-      let hitT = null;
+      let hitT = null, zone = -1;
       for (const tg of targets) {
-        const t = S.rayAABB(ox, oy, oz, dx, dy, dz, tg.x - hw, tg.y, tg.z - hw, tg.x + hw, tg.y + H, tg.z + hw);
-        if (t < dist) { dist = t; hitT = tg; }
+        const r = S.rayPlayer(ox, oy, oz, dx, dy, dz, tg.x, tg.y, tg.z);
+        if (r.t < dist) { dist = r.t; hitT = tg; zone = r.zone; }
       }
       if (hitT) {
-        const head = oy + dy * dist > hitT.y + 1.42;
-        const rec = dmgTo.get(hitT.p) || { dmg: 0, head: false, dist: 0 };
+        const head = zone === 2;
+        const rec = dmgTo.get(hitT.p) || { dmg: 0, head: false, dist: 0, zone: -1 };
         const fall = w.fall ? Math.max(w.fall[2], 1 - Math.max(0, dist - w.fall[0]) / w.fall[1]) : 1;
-        rec.dmg += w.dmg * (head ? w.head : 1) * fall;
+        const zm = head ? w.head : zone === 0 ? S.ZONE_LEG_MULT : 1;
+        rec.dmg += w.dmg * zm * fall;
         rec.dist = Math.max(rec.dist, dist);
         rec.head = rec.head || head;
+        if (zone > rec.zone) rec.zone = zone; // в событие идёт самая тяжёлая зона
         dmgTo.set(hitT.p, rec);
       }
-      if (ends.length < 4) ends.push([r2(ox + dx * dist), r2(oy + dy * dist), r2(oz + dz * dist), hitT ? 1 : 0]);
+      if (ends.length < 4) ends.push([r2(ox + dx * dist), r2(oy + dy * dist), r2(oz + dz * dist), hitT ? 1 : 0, zone]);
     }
 
     p.bloom = Math.min(w.bloomMax, p.bloom + w.bloom);
     this.emit('shot', { id: p.id, w: p.weapon, o: [r2(ox), r2(oy), r2(oz)], e: ends });
 
     for (const [vic, rec] of dmgTo) {
-      this.damage(p, vic, Math.max(1, Math.round(rec.dmg * (p.bot ? this.skill.dmg : 1))), rec.head, rec.dist);
+      this.damage(p, vic, Math.max(1, Math.round(rec.dmg * (p.bot ? this.skill.dmg : 1))), rec.head, rec.dist, rec.zone);
     }
     if (ws.mag <= 0) this.startReload(p);
   }
 
-  damage(att, vic, amount, head, dist = 0) {
+  damage(att, vic, amount, head, dist = 0, zone = head ? 2 : 1) {
     if (!vic.alive || this.state !== 0 || this.t < vic.protectUntil) return;
     vic.hp -= amount;
     const killed = vic.hp <= 0;
-    if (att.sock) att.sock.emit('hit', { hs: head ? 1 : 0, k: killed ? 1 : 0, d: amount });
+    if (att.sock) att.sock.emit('hit', { hs: head ? 1 : 0, k: killed ? 1 : 0, d: amount, z: zone });
     if (vic.sock) vic.sock.emit('hurt', { x: r2(att.x), z: r2(att.z), hp: Math.max(0, vic.hp) });
-    if (killed) this.kill(att, vic, head, dist);
+    if (killed) this.kill(att, vic, head, dist, zone);
   }
 
-  kill(att, vic, head, dist = 0) {
+  kill(att, vic, head, dist = 0, zone = head ? 2 : 1) {
     vic.alive = false;
     vic.hp = 0;
     vic.deaths++;
@@ -288,7 +289,7 @@ class Room {
     vic.respawnAt = this.t + S.MATCH.respawn;
     att.kills++;
     this.scores[att.team]++;
-    this.emit('kill', { k: att.id, v: vic.id, w: att.weapon, hs: head ? 1 : 0, d: Math.round(dist) });
+    this.emit('kill', { k: att.id, v: vic.id, w: att.weapon, hs: head ? 1 : 0, d: Math.round(dist), z: zone });
     if (this.scores[att.team] >= S.MATCH.killLimit) this.endMatch();
   }
 
@@ -429,7 +430,7 @@ class Room {
 
     if (ai.target && (ai.visible || t - ai.lastSeen < 0.8)) {
       const tg = ai.target;
-      const dx = tg.x - b.x, dz = tg.z - b.z, dy = tg.y + 1.35 - (b.y + S.PLAYER.eye);
+      const dx = tg.x - b.x, dz = tg.z - b.z, dy = tg.y + 1.2 - (b.y + S.PLAYER.eye);
       const d = Math.hypot(dx, dz);
       if (t >= ai.errT) {
         ai.errT = t + 0.35;

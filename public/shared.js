@@ -29,6 +29,15 @@ export const WEAPONS = [
   { id: 'sniper',  name: 'Снайперка', short: 'СН', dmg: 90, rate: 1.3,   mag: 5,  reserve: 25,  reload: 2.8, spread: 0.050, bloom: 0,      bloomMax: 0,     adsMul: 0.03, pellets: 1, auto: false, head: 2.5, range: 300, fall: null,           zoom: 20, kick: [0.0300, 0.0040] },
 ];
 
+// Зоны попадания (от ног): 0 — ноги, 1 — туловище и руки, 2 — голова. Сервер и клиент считают одинаково.
+export const ZONES = ['НОГИ', 'ТУЛОВИЩЕ', 'ГОЛОВА'];
+export const ZONE_LEG_MULT = 0.75; // урон по ногам
+export const HITBOXES = [
+  { zone: 0, y0: 0, y1: 0.88, hw: 0.22 },
+  { zone: 1, y0: 0.88, y1: 1.44, hw: 0.28 },
+  { zone: 2, y0: 1.44, y1: 1.8, hw: 0.16 },
+];
+
 export const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
 export function wrapAngle(a) {
@@ -129,6 +138,17 @@ export function rayWorld(ox, oy, oz, dx, dy, dz, maxD = Infinity) {
     if (t < best) best = t;
   }
   return best;
+}
+
+// Луч против игрока (по трём хитбоксам). Возвращает { t, zone } — ближайшее пересечение или t = Infinity.
+export function rayPlayer(ox, oy, oz, dx, dy, dz, px, py, pz) {
+  let best = Infinity, zone = -1;
+  for (let i = 0; i < HITBOXES.length; i++) {
+    const h = HITBOXES[i];
+    const t = rayAABB(ox, oy, oz, dx, dy, dz, px - h.hw, py + h.y0, pz - h.hw, px + h.hw, py + h.y1, pz + h.hw);
+    if (t < best) { best = t; zone = h.zone; }
+  }
+  return { t: best, zone };
 }
 
 // ---------- Движение ----------

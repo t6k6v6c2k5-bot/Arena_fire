@@ -164,3 +164,6 @@ body:not(.touch-ui) .wb b { font-size: 10px; }
 #bAuto { left: calc(154px + var(--sal)); top: calc(30px + var(--sat)); font-weight: 800; }
 #bAuto.on { background: rgba(239, 68, 68, 0.55); border-color: #ff8c8c; }
 .slider input[type=checkbox] { width: 22px; height: 22px; }
+
+#hitm.lg::before, #hitm.lg::after { background: #facc15; }
+#dmgnums .n.lg { color: #facc15; font-size: 17px; }

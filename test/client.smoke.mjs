@@ -203,7 +203,7 @@ assert.ok(received.shot > 3, `событий shot: ${received.shot}`);
   human.x = -10; human.z = 18; human.y = 0;
   enemy.x = 6; enemy.z = 18; enemy.y = 0; enemy.hp = 100; enemy.hist = [];
   A.view.yaw = -Math.PI / 2;
-  A.view.pitch = Math.atan2(1.0 - S.PLAYER.eye, 16);
+  A.view.pitch = Math.atan2(1.15 - S.PLAYER.eye, 16);
   const hitsBefore = received.hit || 0;
   runFrames(20);
   for (let i = 0; i < 25; i++) { human.hp = 1e6; if (i === 0) ptr('bFire', 'pointerdown'); runFrames(1); }
@@ -222,14 +222,14 @@ assert.ok(received.shot > 3, `событий shot: ${received.shot}`);
   for (const p of room.players.values()) if (p !== enemy && p !== human) { p.x = 0; p.z = -20; p.vx = p.vz = 0; p.protectUntil = 0; p.bot = false; p.ai = null; }
   enemy.bot = false; enemy.ai = null; enemy.protectUntil = 0; human.protectUntil = 0;
   human.x = -10; human.z = 18; human.y = 0; enemy.x = 6; enemy.z = 18; enemy.y = 0; enemy.hp = 100; enemy.hist = [];
-  A.view.yaw = -Math.PI / 2; A.view.pitch = Math.atan2(1.0 - S.PLAYER.eye, 16);
+  A.view.yaw = -Math.PI / 2; A.view.pitch = Math.atan2(1.15 - S.PLAYER.eye, 16);
   A.setAuto(false);
   runFrames(25);
   const before = human.wp[0].mag;
   runFrames(40);
   assert.equal(human.wp[0].mag, before, 'при выключенном авто-огне стрельбы быть не должно');
   A.setAuto(true);
-  for (let i = 0; i < 40; i++) { human.hp = 1e6; A.view.yaw = -Math.PI / 2; A.view.pitch = Math.atan2(1.0 - S.PLAYER.eye, 16); runFrames(1); }
+  for (let i = 0; i < 40; i++) { human.hp = 1e6; A.view.yaw = -Math.PI / 2; A.view.pitch = Math.atan2(1.15 - S.PLAYER.eye, 16); runFrames(1); }
   human.hp = 100;
   assert.ok(human.wp[0].mag < before, 'авто-огонь не стрелял по врагу под прицелом');
   assert.ok(enemy.hp < 100 || !enemy.alive, 'авто-огонь не нанёс урон');

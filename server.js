@@ -38,9 +38,9 @@ const io = new Server(server, {
 
 // ---------- Комнаты ----------
 let roomSeq = 1;
-function findRoom() {
-  for (const r of rooms.values()) if (r.humans().length < S.MATCH.maxHumans) return r;
-  const r = new Room(roomSeq++);
+function findRoom(skill) {
+  for (const r of rooms.values()) if (r.skillIdx === skill && r.humans().length < S.MATCH.maxHumans) return r;
+  const r = new Room(roomSeq++, skill);
   rooms.set(r.id, r);
   return r;
 }
@@ -60,8 +60,10 @@ io.on('connection', (socket) => {
     let name = user ? [user.first_name, user.last_name].filter(Boolean).join(' ') || user.username : String(data.name || '');
     name = String(name || 'Игрок').replace(/[<>&"'\u0000-\u001f]/g, '').trim().slice(0, 16) || 'Игрок';
 
-    room = findRoom();
+    const skill = S.clamp(Math.floor(num(data.skill, 0)), 0, 2);
+    room = findRoom(skill);
     me = room.addHuman(socket, name);
+    me.assist = data.touch ? 1 : 0.3; // помощь прицеливания: полная на телефоне, лёгкая на ПК
     room.fillBots();
     socket.emit('welcome', room.welcome(me));
     if (typeof cb === 'function') cb({ ok: true });

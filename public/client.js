@@ -591,7 +591,7 @@ function ensureSocket() {
     $('touch').classList.remove('hidden');
     closeMenu();
     lockPointer();
-    flashMsg(`Вы в команде «${S.TEAM_NAMES[myTeam]}»`, 'Удачи в бою!', 3000);
+    flashMsg(`Вы в команде «${S.TEAM_NAMES[myTeam]}»`, `Боты: ${d.skillName || 'Лёгкие'}`, 3000);
   });
   socket.on('roster', (d) => setRoster(d.players));
 
@@ -640,7 +640,7 @@ function resetNetState() {
 function doJoin() {
   const name = ($('nameInput').value || '').trim().slice(0, 16);
   localStorage.setItem('af_name', name);
-  socket.emit('join', { name, initData: tg?.initData || '' });
+  socket.emit('join', { name, initData: tg?.initData || '', touch: isTouch, skill: parseInt($('skill').value, 10) || 0 });
 }
 
 function onSnap(s) {
@@ -858,7 +858,7 @@ $('zoneR').addEventListener('pointerdown', (e) => {
 });
 $('zoneR').addEventListener('pointermove', (e) => {
   if (e.pointerId !== look.id) return;
-  applyLook(e.clientX - look.x, e.clientY - look.y, 0.0045);
+  applyLook(e.clientX - look.x, e.clientY - look.y, 0.0058);
   look.x = e.clientX; look.y = e.clientY;
 });
 const endLook = (e) => { if (e.pointerId === look.id) look.id = null; };
@@ -876,7 +876,7 @@ bFire.addEventListener('pointerdown', (e) => {
 });
 bFire.addEventListener('pointermove', (e) => {
   if (e.pointerId !== fireTouch.id) return;
-  applyLook(e.clientX - fireTouch.x, e.clientY - fireTouch.y, 0.0045);
+  applyLook(e.clientX - fireTouch.x, e.clientY - fireTouch.y, 0.0058);
   fireTouch.x = e.clientX; fireTouch.y = e.clientY;
 });
 const endFire = (e) => { if (e.pointerId !== fireTouch.id) return; fireTouch.id = null; input.fireHeld = false; bFire.classList.remove('down'); };
@@ -895,7 +895,7 @@ hold($('bWeapon'), () => changeWeapon((selWeapon + 1) % S.WEAPONS.length));
 hold($('bScore'), () => { sbPinned = !sbPinned; syncScoreboard(); });
 hold($('bMenu'), () => openMenu());
 
-document.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
+document.addEventListener('touchmove', (e) => { if (e.target?.closest?.('.card')) return; e.preventDefault(); }, { passive: false });
 
 function releaseInputs() {
   for (const k of Object.keys(keys)) keys[k] = false;
@@ -919,13 +919,41 @@ function closeMenu() {
 
 $('nameInput').value = localStorage.getItem('af_name') || tg?.initDataUnsafe?.user?.first_name || '';
 $('sens').value = String(sens);
+$('skill').value = localStorage.getItem('af_skill') ?? '0';
+$('skill').addEventListener('change', (e) => localStorage.setItem('af_skill', e.target.value));
 $('sens').addEventListener('input', (e) => { sens = parseFloat(e.target.value) || 1; localStorage.setItem('af_sens', String(sens)); });
 $('nameInput').addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') $('playBtn').click(); });
 
-let fsRequested = false;
+// ---------- Полный экран ----------
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = !!window.navigator.standalone || matchMedia('(display-mode: fullscreen)').matches || matchMedia('(display-mode: standalone)').matches;
+const fsElement = () => document.fullscreenElement || document.webkitFullscreenElement;
+const canFs = !!(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen);
+
+function toggleFullscreen(forceEnter = false) {
+  try {
+    if (fsElement()) {
+      if (!forceEnter) (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+      return;
+    }
+    if (tg?.requestFullscreen && tg.initData) { tg.requestFullscreen(); return; }
+    const d = document.documentElement;
+    const rq = d.requestFullscreen || d.webkitRequestFullscreen;
+    if (!rq) return;
+    const p = rq.call(d, { navigationUI: 'hide' });
+    p?.then?.(() => { try { screen.orientation?.lock?.('landscape')?.catch?.(() => {}); } catch { /* ignore */ } });
+    p?.catch?.(() => {});
+  } catch { /* ignore */ }
+}
+// iPhone в обычном браузере не умеет Fullscreen API — подсказываем установку на экран «Домой»
+$('iosHint').classList.toggle('hidden', !(isIOS && !isStandalone && !tg?.initData));
+$('fsBtn').classList.toggle('hidden', !canFs && !tg?.requestFullscreen);
+$('fsBtn').addEventListener('click', () => toggleFullscreen());
+hold($('bFull'), () => toggleFullscreen());
+
 $('playBtn').addEventListener('click', () => {
   initAudio();
-  if (!fsRequested) { fsRequested = true; try { tg?.requestFullscreen?.(); } catch { /* ignore */ } }
+  toggleFullscreen(true);
   if (joined) { closeMenu(); lockPointer(); return; }
   wantJoin = true;
   $('playBtn').disabled = true;
@@ -933,6 +961,24 @@ $('playBtn').addEventListener('click', () => {
   ensureSocket();
   if (socket.connected) doJoin();
 });
+
+// ---------- Индикатор цели под прицелом ----------
+let lockShown = false;
+function updateTargetLock() {
+  let hit = false;
+  if (joined && alive && !menuOpen) {
+    const ox = camera.position.x, oy = camera.position.y, oz = camera.position.z;
+    const cp = Math.cos(view.pitch);
+    const dx = -Math.sin(view.yaw) * cp, dy = Math.sin(view.pitch), dz = -Math.cos(view.yaw) * cp;
+    for (const r of remotes.values()) {
+      if (r.team === myTeam || !r.wasAlive || !r.model.visible) continue;
+      const p = r.model.position;
+      const t = S.rayAABB(ox, oy, oz, dx, dy, dz, p.x - 0.55, p.y, p.z - 0.55, p.x + 0.55, p.y + 1.85, p.z + 0.55);
+      if (t < 150 && S.rayWorld(ox, oy, oz, dx, dy, dz, t) >= t) { hit = true; break; }
+    }
+  }
+  if (hit !== lockShown) { lockShown = hit; el.crosshair.classList.toggle('lock', hit); }
+}
 
 // ---------- Камера и цикл ----------
 let bobT = 0;
@@ -986,6 +1032,7 @@ function frame(nowMs) {
   const speed = updateCamera(dt);
   updateViewmodel(dt, speed);
   updateFx(dt);
+  updateTargetLock();
 
   // прицел «дышит» от движения и стрельбы
   const g = 6 + speed * 1.3 + vm.kick * 8 + (me.onGround ? 0 : 6);

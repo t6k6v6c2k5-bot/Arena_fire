@@ -36,7 +36,7 @@ function elem(id) {
   return make({
     addEventListener: (type, fn) => { (handlers[type] ??= []).push(fn); },
     __h: handlers,
-    value: id === 'nameInput' ? 'Тестер' : id === 'sens' ? '1' : '',
+    value: id === 'nameInput' ? 'Тестер' : id === 'sens' ? '1' : id === 'skill' ? '0' : '',
     setPointerCapture() {}, releasePointerCapture() {},
   });
 }
@@ -46,6 +46,7 @@ globalThis.document = {
   createElement: () => make({ getContext: () => make() }),
   addEventListener: (t, fn) => { (docHandlers[t] ??= []).push(fn); },
   body: make(),
+  documentElement: make({ requestFullscreen: () => Promise.resolve() }),
   hidden: false,
   pointerLockElement: null,
   exitPointerLock() {},
@@ -67,6 +68,7 @@ const toServer = [];
 const handlers = {};
 let room = null;
 let human = null;
+let joinData = null;
 const sent = [];
 const received = {};
 
@@ -91,8 +93,10 @@ function pump() {
     if (m.due > frameNo) continue;
     toServer.splice(i, 1);
     if (m.ev === 'join') {
-      room = new Room(1);
+      joinData = m.data;
+      room = new Room(1, m.data.skill);
       human = room.addHuman(serverSock, m.data.name);
+      human.assist = m.data.touch ? 1 : 0.3;
       room.fillBots();
       serverSock.emit('welcome', room.welcome(human));
     } else if (m.ev === 'input' && human) room.queueInput(human, m.data);
@@ -132,6 +136,9 @@ els.playBtn.__h.click.forEach((f) => f({}));
 runFrames(40);
 assert.ok(sent.includes('join'), 'клиент не отправил join');
 assert.equal(A.joined, true, 'welcome не обработан');
+assert.equal(joinData.touch, true, 'клиент не сообщил про тач-режим');
+assert.equal(joinData.skill, 0, 'сложность ботов не передана');
+assert.equal(room.skill.name, 'Лёгкие');
 assert.ok(received.snap > 5, `снапшотов получено: ${received.snap}`);
 assert.equal(A.remotes.size, S.MATCH.botsTotal - 1, `моделей других игроков: ${A.remotes.size}`);
 assert.equal(A.alive, true);
@@ -171,6 +178,26 @@ runFrames(10);
 assert.ok(human.wp[0].mag < mag0, `сервер не списал патроны: ${human.wp[0].mag}`);
 assert.ok(A.info.wp[0][0] < mag0, `клиент не видит расход патронов: ${A.info.wp[0][0]}`);
 assert.ok(received.shot > 3, `событий shot: ${received.shot}`);
+
+// 4b. Попадание по неподвижной цели через весь конвейер (тач-кнопка → сервер с лагом → hit у клиента).
+{
+  const enemy = [...room.players.values()].find((p) => p.bot && p.team !== human.team);
+  enemy.bot = false; enemy.ai = null; enemy.protectUntil = 0; // стоит на месте
+  human.protectUntil = 0;
+  for (const p of room.players.values()) if (p !== enemy && p !== human) { p.x = 0; p.z = -20; p.vx = p.vz = 0; p.protectUntil = 0; }
+  human.x = -10; human.z = 18; human.y = 0;
+  enemy.x = 6; enemy.z = 18; enemy.y = 0; enemy.hp = 100; enemy.hist = [];
+  A.view.yaw = -Math.PI / 2;
+  A.view.pitch = Math.atan2(1.0 - S.PLAYER.eye, 16);
+  const hitsBefore = received.hit || 0;
+  runFrames(20);
+  for (let i = 0; i < 25; i++) { human.hp = 1e6; if (i === 0) ptr('bFire', 'pointerdown'); runFrames(1); }
+  ptr('bFire', 'pointerup');
+  human.hp = 100;
+  runFrames(10);
+  assert.ok((received.hit || 0) - hitsBefore >= 2, `клиент не получил попаданий: ${(received.hit || 0) - hitsBefore}`);
+  assert.ok(enemy.hp < 100 || !enemy.alive, 'враг не получил урон');
+}
 
 // 5. Смена оружия и перезарядка.
 ptr('bWeapon', 'pointerdown'); ptr('bWeapon', 'pointerup');

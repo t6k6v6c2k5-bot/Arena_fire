@@ -44,7 +44,14 @@ const b = sock(); state.onConnection(b); b.h.join({ name: 'Второй' });
 assert.equal(health().humans, 2);
 assert.equal(health().rooms, 1, 'второй игрок должен попасть в ту же комнату');
 
-a.h.disconnect(); b.h.disconnect();
+// другая сложность — отдельная комната, помощь прицеливания по флагу тача
+const c = sock(); state.onConnection(c); c.h.join({ name: 'Хард', skill: 2, touch: true });
+assert.equal(c.got.welcome[0].skill, 2);
+assert.equal(health().rooms, 2, 'комнаты разной сложности должны быть раздельными');
+const d = sock(); state.onConnection(d); d.h.join({ name: 'Нет такой сложности', skill: 99 });
+assert.equal(d.got.welcome[0].skill, 2, 'неверная сложность должна ограничиваться');
+
+a.h.disconnect(); b.h.disconnect(); c.h.disconnect(); d.h.disconnect();
 assert.equal(health().rooms, 0, 'пустая комната не удалена');
 
 console.log('server.wiring.mjs: все проверки пройдены');

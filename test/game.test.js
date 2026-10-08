@@ -136,6 +136,53 @@ function duel() {
   assert.ok(b.hp < 100 && b.hp <= 100 - S.WEAPONS[2].dmg, `дробовик не попал: hp=${b.hp}`);
 }
 
+// 7b. Помощь прицеливания: выстрел мимо на ~3° попадает только с assist; сквозь стену не тянет.
+{
+  const { room, a, b } = duel();
+  a.pitch = Math.atan2(1.0 - S.PLAYER.eye, 15);
+  a.yaw = -Math.PI / 2 + 0.05; // ~2.9° в сторону: на 15 м это ~0.75 м мимо цели
+  let miss = 0, hit = 0;
+  for (let i = 0; i < 20; i++) { b.hp = 100; a.nextFire = 0; a.wp[0].mag = 30; a.assist = 0; room.fire(a, Date.now()); if (b.hp < 100) hit++; }
+  for (let i = 0; i < 20; i++) { b.hp = 100; a.nextFire = 0; a.wp[0].mag = 30; a.assist = 1; room.fire(a, Date.now()); if (b.hp < 100) miss++; }
+  assert.equal(hit, 0, `без помощи выстрел мимо должен промахиваться, попаданий: ${hit}`);
+  assert.ok(miss >= 18, `с помощью прицеливания должно попадать: ${miss}/20`);
+  // за стеной помощь не работает: ставим цель за центральным зданием
+  b.x = 0; b.z = 4.5; b.hp = 100; a.x = 0; a.z = -4.5; a.yaw = 0.05; a.pitch = 0;
+  for (let i = 0; i < 10; i++) { a.nextFire = 0; a.wp[0].mag = 30; room.fire(a, Date.now()); }
+  assert.equal(b.hp, 100, 'помощь прицеливания пробила стену');
+}
+
+// 7c. Сложность ботов: у лёгких меньше здоровья и урона, чем у сложных.
+{
+  const easy = new Room(10, 0), hard = new Room(11, 2);
+  assert.ok(easy.skill.hp < hard.skill.hp && easy.skill.dmg < hard.skill.dmg && easy.skill.react[0] > hard.skill.react[0]);
+  const p = new Player('Бот', 1, true); easy.players.set(p.id, p); easy.spawn(p);
+  assert.equal(p.hp, easy.skill.hp);
+  const hum = new Player('Человек', 0, false, fakeSock()); easy.players.set(hum.id, hum); easy.spawn(hum);
+  assert.equal(hum.hp, 100);
+  // контролируемая дуэль: один бот стреляет по неподвижной цели с 15 м, 8 секунд, 24 повтора
+  const duelDamage = (skill) => {
+    let total = 0;
+    for (let rep = 0; rep < 24; rep++) {
+      const room = new Room(200 + rep, skill);
+      const h = new Player('Мишень', 0, false, fakeSock());
+      const bot = new Player('Бот', 1, true);
+      room.players.set(h.id, h); room.players.set(bot.id, bot);
+      room.spawn(h); room.spawn(bot);
+      h.protectUntil = 0; bot.protectUntil = 0;
+      h.x = 5; h.z = 18; bot.x = -10; bot.z = 18; bot.yaw = -Math.PI / 2;
+      const orig = room.damage.bind(room);
+      room.damage = (att, vic, amt, head) => { if (vic === h) total += amt; return orig(att, vic, amt, head); };
+      for (let i = 0; i < S.TICK * 8; i++) { room.tick(); h.hp = 100; h.x = 5; h.z = 18; }
+    }
+    return total / 24;
+  };
+  const dEasy = duelDamage(0), dMid = duelDamage(1), dHard = duelDamage(2);
+  console.log(`  урон по цели за 8 с: лёгкие ${dEasy.toFixed(0)}, средние ${dMid.toFixed(0)}, сложные ${dHard.toFixed(0)}`);
+  assert.ok(dEasy < dMid && dEasy < dHard, "лёгкие боты должны быть слабее остальных");
+  assert.ok(dEasy < dHard * 0.7, `лёгкие боты не заметно слабее сложных: ${dEasy} против ${dHard}`);
+}
+
 // 8. Полный матч с ботами: бои, события, итоги и перезапуск.
 {
   const room = new Room(4);

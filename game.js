@@ -7,6 +7,16 @@ const num = (v, d = 0) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
 const r2 = (v) => Math.round(v * 100) / 100;
 const r3 = (v) => Math.round(v * 1000) / 1000;
 
+// Сложность ботов: 0 — лёгкая, 1 — средняя, 2 — сложная.
+export const BOT_SKILL = [
+  { name: 'Лёгкие',   hp: 70,  dmg: 0.4, spread: 2.5, range: 35, react: [0.7, 1.3],   err: 0.16, aimTol: 0.06, burst: [0.2, 0.4],   pause: [0.6, 1.2],   turn: 2.2, strafe: 0.5, jump: 0 },
+  { name: 'Средние',  hp: 100, dmg: 0.5, spread: 2.0, range: 40, react: [0.45, 0.9],  err: 0.10, aimTol: 0.08, burst: [0.25, 0.5],  pause: [0.4, 0.9],   turn: 3.0, strafe: 0.8, jump: 0.08 },
+  { name: 'Сложные',  hp: 100, dmg: 0.7, spread: 1.5, range: 50, react: [0.3, 0.65],  err: 0.07, aimTol: 0.10, burst: [0.3, 0.7],   pause: [0.25, 0.6],  turn: 4.5, strafe: 0.9, jump: 0.15 },
+];
+// Помощь прицеливания: конус (рад), в котором выстрел притягивается к видимому врагу.
+const ASSIST_ANGLE = 0.08;
+const ASSIST_PULL = 0.85;
+
 // ---------- Игроки ----------
 const BOT_NAMES = ['Волк', 'Тень', 'Гвоздь', 'Ястреб', 'Шторм', 'Кобра', 'Дымок', 'Лис', 'Бизон', 'Рысь', 'Барс', 'Сокол'];
 let nextId = 1;
@@ -46,12 +56,15 @@ class Player {
     this.respawnAt = 0;
     this.protectUntil = 0;
     this.ai = bot ? newAI() : null;
+    this.assist = 0; // 0..1: помощь прицеливания (для тач-игроков 1)
   }
 }
 
 class Room {
-  constructor(id) {
+  constructor(id, skill = 0) {
     this.id = id;
+    this.skillIdx = clamp(Math.floor(num(skill, 0)), 0, BOT_SKILL.length - 1);
+    this.skill = BOT_SKILL[this.skillIdx];
     this.players = new Map();
     this.t = 0;
     this.state = 0; // 0 — бой, 1 — итоги
@@ -129,7 +142,7 @@ class Room {
     p.x = pt[0]; p.y = 0; p.z = pt[1];
     p.vx = p.vy = p.vz = 0;
     p.onGround = true;
-    p.hp = 100;
+    p.hp = p.bot ? this.skill.hp : 100;
     p.alive = true;
     p.weapon = 0;
     p.wp = S.WEAPONS.map((w) => ({ mag: w.mag, res: p.bot ? 9999 : w.reserve }));
@@ -184,13 +197,35 @@ class Room {
     const ux = sy * sp, uy = cp, uz = cy * sp;
     const hsp = Math.hypot(p.vx, p.vz);
     let spread = w.spread * (1 + hsp * 0.12) + (p.onGround ? 0 : 0.03);
-    if (p.bot) spread *= 1.5;
+    if (p.bot) spread *= this.skill.spread;
 
     const targets = [];
     for (const o of this.players.values()) {
       if (o === p || !o.alive || o.team === p.team || this.t < o.protectUntil) continue;
       const pos = this.posAt(o, rt);
       targets.push({ p: o, x: pos.x, y: pos.y, z: pos.z });
+    }
+
+    // Помощь прицеливания: если враг в конусе вокруг линии прицела и виден — притягиваем линию к нему.
+    let bx = fx, by = fy, bz = fz;
+    if (p.assist > 0 && !p.bot) {
+      const lim = ASSIST_ANGLE * p.assist;
+      let bestAng = lim, aim = null;
+      for (const tg of targets) {
+        const ax = tg.x - ox, ay = tg.y + 1.2 - oy, az = tg.z - oz;
+        const d = Math.hypot(ax, ay, az);
+        if (d < 1 || d > w.range) continue;
+        const ang = Math.acos(clamp((ax * fx + ay * fy + az * fz) / d, -1, 1));
+        if (ang >= bestAng) continue;
+        if (S.rayWorld(ox, oy, oz, ax / d, ay / d, az / d, d) < d - 0.01) continue;
+        bestAng = ang; aim = [ax / d, ay / d, az / d];
+      }
+      if (aim) {
+        const k = ASSIST_PULL * Math.min(1, p.assist);
+        bx = fx + (aim[0] - fx) * k; by = fy + (aim[1] - fy) * k; bz = fz + (aim[2] - fz) * k;
+        const bl = Math.hypot(bx, by, bz);
+        bx /= bl; by /= bl; bz /= bl;
+      }
     }
 
     const dmgTo = new Map();
@@ -200,7 +235,7 @@ class Room {
       const a = Math.random() * Math.PI * 2;
       const rr = Math.sqrt(Math.random()) * spread;
       const ca = Math.cos(a) * rr, sa = Math.sin(a) * rr;
-      let dx = fx + rx * ca + ux * sa, dy = fy + uy * sa, dz = fz + rz * ca + uz * sa;
+      let dx = bx + rx * ca + ux * sa, dy = by + uy * sa, dz = bz + rz * ca + uz * sa;
       const dl = Math.hypot(dx, dy, dz);
       dx /= dl; dy /= dl; dz /= dl;
 
@@ -223,7 +258,7 @@ class Room {
     this.emit('shot', { id: p.id, w: p.weapon, o: [r2(ox), r2(oy), r2(oz)], e: ends });
 
     for (const [vic, rec] of dmgTo) {
-      this.damage(p, vic, Math.round(rec.dmg * (p.bot ? 0.7 : 1)), rec.head);
+      this.damage(p, vic, Math.max(1, Math.round(rec.dmg * (p.bot ? this.skill.dmg : 1))), rec.head);
     }
     if (ws.mag <= 0) this.startReload(p);
   }
@@ -270,7 +305,7 @@ class Room {
   // ----- Сеть: разбор пакетов клиента -----
   welcome(p) {
     return {
-      id: p.id, team: p.team, room: this.id, tick: S.TICK,
+      id: p.id, team: p.team, room: this.id, tick: S.TICK, skill: this.skillIdx, skillName: this.skill.name,
       players: [...this.players.values()].map((o) => ({ id: o.id, name: o.name, team: o.team, bot: o.bot ? 1 : 0 })),
     };
   }
@@ -357,7 +392,7 @@ class Room {
   }
 
   botTick(b) {
-    const ai = b.ai, t = this.t;
+    const ai = b.ai, t = this.t, sk = this.skill;
     if (!b.alive || this.state !== 0) return;
 
     if (t >= ai.nextScan) {
@@ -366,10 +401,10 @@ class Room {
       for (const o of this.players.values()) {
         if (!o.alive || o.team === b.team) continue;
         const d = Math.hypot(o.x - b.x, o.z - b.z);
-        if (d < bd && d < 50 && this.los(b, o)) { best = o; bd = d; }
+        if (d < bd && d < sk.range && this.los(b, o)) { best = o; bd = d; }
       }
       if (best) {
-        if (!ai.target || ai.target.id !== best.id || t - ai.lastSeen > 1) ai.reactAt = t + 0.3 + Math.random() * 0.35;
+        if (!ai.target || ai.target.id !== best.id || t - ai.lastSeen > 1) ai.reactAt = t + sk.react[0] + Math.random() * (sk.react[1] - sk.react[0]);
         ai.target = best; ai.lastSeen = t; ai.visible = true;
       } else {
         ai.visible = false;
@@ -388,24 +423,24 @@ class Room {
       const d = Math.hypot(dx, dz);
       if (t >= ai.errT) {
         ai.errT = t + 0.35;
-        ai.errYaw = (Math.random() - 0.5) * 0.07;
-        ai.errPitch = (Math.random() - 0.5) * 0.05;
+        ai.errYaw = (Math.random() - 0.5) * sk.err;
+        ai.errPitch = (Math.random() - 0.5) * sk.err * 0.7;
       }
       wantYaw = Math.atan2(-dx, -dz) + ai.errYaw;
       wantPitch = Math.atan2(dy, d) + ai.errPitch;
       if (t >= ai.strafeT) {
         ai.strafe = Math.random() < 0.5 ? -1 : 1;
         ai.strafeT = t + 0.7 + Math.random() * 1.2;
-        if (Math.random() < 0.15) jump = true;
+        if (Math.random() < sk.jump) jump = true;
       }
-      mx = ai.strafe * 0.9;
+      mx = ai.strafe * sk.strafe;
       mz = d > 16 ? 1 : d < 6 ? -0.7 : 0.15;
       const yawErr = Math.abs(S.angDiff(wantYaw, b.yaw));
-      if (ai.visible && t >= ai.reactAt && yawErr < 0.1 && d < S.WEAPONS[b.weapon].range) {
+      if (ai.visible && t >= ai.reactAt && yawErr < sk.aimTol && d < S.WEAPONS[b.weapon].range) {
         if (t < ai.burstUntil) fire = true;
         else if (t >= ai.pauseUntil) {
-          ai.burstUntil = t + 0.3 + Math.random() * 0.4;
-          ai.pauseUntil = ai.burstUntil + 0.25 + Math.random() * 0.35;
+          ai.burstUntil = t + sk.burst[0] + Math.random() * (sk.burst[1] - sk.burst[0]);
+          ai.pauseUntil = ai.burstUntil + sk.pause[0] + Math.random() * (sk.pause[1] - sk.pause[0]);
           fire = true;
         }
       }
@@ -433,7 +468,7 @@ class Room {
     const ws = b.wp[b.weapon];
     if (ws.mag === 0 || (!ai.target && ws.mag < 10)) reload = true;
 
-    const maxTurn = (ai.target ? 4.5 : 3.0) * dt;
+    const maxTurn = (ai.target ? sk.turn : 3.0) * dt;
     const yaw = S.wrapAngle(b.yaw + clamp(S.angDiff(wantYaw, b.yaw), -maxTurn, maxTurn));
     const pitch = b.pitch + clamp(wantPitch - b.pitch, -3 * dt, 3 * dt);
 

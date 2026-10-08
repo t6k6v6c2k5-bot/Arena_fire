@@ -1,0 +1,190 @@
+// Тест серверной логики без сети: комнаты, боты, хитскан, лаг-компенсация, матч, проверка Telegram.
+import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import * as S from '../public/shared.js';
+import { Room, Player } from '../game.js';
+import { verifyInitData } from '../auth.js';
+
+function fakeSock() {
+  const s = { events: [], last: {} };
+  s.emit = (ev, data) => { s.events.push([ev, data]); s.last[ev] = data; };
+  s.volatile = { emit: s.emit };
+  s.count = (ev) => s.events.filter((e) => e[0] === ev).length;
+  return s;
+}
+const tickN = (room, n) => { for (let i = 0; i < n; i++) room.tick(); };
+
+// 1. Комната, боты и баланс команд.
+{
+  const room = new Room(1);
+  const sock = fakeSock();
+  const me = room.addHuman(sock, 'Тест');
+  room.fillBots();
+  assert.equal(room.players.size, S.MATCH.botsTotal);
+  assert.equal(room.teamCount(0), 4);
+  assert.equal(room.teamCount(1), 4);
+  // второй человек вытесняет бота
+  const sock2 = fakeSock();
+  room.addHuman(sock2, 'Второй');
+  room.fillBots();
+  assert.equal(room.players.size, S.MATCH.botsTotal);
+  assert.equal(room.bots().length, 6);
+  room.removePlayer(me.id);
+  room.fillBots();
+  assert.equal(room.players.size, S.MATCH.botsTotal);
+}
+
+// 2. Ввод человека: ack растёт, позиция меняется, снапшоты корректны.
+{
+  const room = new Room(2);
+  const sock = fakeSock();
+  const me = room.addHuman(sock, 'Бегун');
+  room.fillBots();
+  me.z = 10; // свободная полоса, чтобы не упереться в укрытие у базы
+  const x0 = me.x;
+  const dir = me.team === 0 ? -Math.PI / 2 : Math.PI / 2; // лицом к центру
+  for (let seq = 1; seq <= 30; seq++) {
+    me.queue.push({ seq, mx: 0, mz: 1, yaw: dir, pitch: 0, jump: false, fire: false, reload: false, weapon: 0, rt: Date.now() });
+    room.tick();
+  }
+  assert.equal(me.ack, 30, `ack=${me.ack}`);
+  assert.ok(Math.abs(me.x - x0) > 3, `игрок не сдвинулся: ${x0} → ${me.x}`);
+  const snap = sock.last.snap;
+  assert.ok(snap && snap.me && snap.p.length === S.MATCH.botsTotal);
+  assert.equal(snap.ack, 30);
+  for (const row of snap.p) for (const v of row) assert.ok(Number.isFinite(v), 'NaN в снапшоте');
+  assert.equal(sock.count('roster') >= 1, true);
+}
+
+// 3. Хитскан: попадание, урон, убийство, счёт, событие kill.
+function duel() {
+  const room = new Room(3);
+  const sockA = fakeSock(), sockB = fakeSock();
+  const a = new Player('Стрелок', 0, false, sockA);
+  const b = new Player('Цель', 1, false, sockB);
+  room.players.set(a.id, a); room.players.set(b.id, b);
+  room.spawn(a); room.spawn(b);
+  for (const p of [a, b]) { p.protectUntil = 0; p.nextFire = 0; }
+  a.x = -10; a.z = 18; a.yaw = -Math.PI / 2; a.pitch = Math.atan2(1.0 - S.PLAYER.eye, 15);
+  b.x = 5; b.z = 18;
+  return { room, a, b, sockA, sockB };
+}
+{
+  const { room, a, b, sockA, sockB } = duel();
+  room.fire(a, Date.now());
+  assert.equal(b.hp, 100 - 26, `урон по корпусу: hp=${b.hp}`);
+  assert.equal(sockA.count('hit'), 1);
+  assert.equal(sockB.count('hurt'), 1);
+  assert.equal(sockA.count('shot'), 1);
+  // добиваем
+  let guard = 0;
+  while (b.alive && guard++ < 40) { a.nextFire = 0; room.fire(a, Date.now()); if (a.wp[0].mag === 0) a.wp[0].mag = 30; a.reloading = false; }
+  assert.ok(!b.alive, 'цель не убита');
+  assert.equal(a.kills, 1);
+  assert.equal(b.deaths, 1);
+  assert.equal(room.scores[0], 1);
+  const kill = sockA.events.find((e) => e[0] === 'kill')[1];
+  assert.equal(kill.k, a.id); assert.equal(kill.v, b.id);
+}
+
+// 4. Огонь по своим не проходит; защита после спавна работает.
+{
+  const { room, a, b } = duel();
+  b.team = 0;
+  room.fire(a, Date.now());
+  assert.equal(b.hp, 100, 'friendly fire');
+  b.team = 1; b.protectUntil = room.t + 5; a.nextFire = 0;
+  room.fire(a, Date.now());
+  assert.equal(b.hp, 100, 'урон по защищённому игроку');
+}
+
+// 5. Лаг-компенсация: цель была на линии 100 мс назад, сейчас ушла в сторону.
+{
+  const { room, a, b } = duel();
+  const now = Date.now();
+  b.z = 21; // «сейчас» цель в стороне от линии огня
+  b.hist = [{ ts: now - 150, x: 5, y: 0, z: 18 }, { ts: now - 50, x: 5, y: 0, z: 18 }];
+  const pos = room.posAt(b, now - 100);
+  assert.ok(Math.abs(pos.z - 18) < 1e-6, `posAt z=${pos.z}`);
+  room.fire(a, now - 100);
+  assert.equal(b.hp, 74, `с компенсацией должно быть попадание, hp=${b.hp}`);
+  a.nextFire = 0;
+  room.fire(a, now);
+  assert.equal(b.hp, 74, 'без компенсации выстрел должен пройти мимо');
+}
+
+// 6. Перезарядка и боезапас.
+{
+  const { room, a } = duel();
+  a.wp[0].mag = 3;
+  for (let i = 0; i < 3; i++) { a.nextFire = 0; room.fire(a, Date.now()); }
+  assert.equal(a.wp[0].mag, 0);
+  assert.ok(a.reloading, 'автоперезарядка не началась');
+  const res0 = a.wp[0].res;
+  a.alive = true;
+  tickN(room, Math.ceil(S.WEAPONS[0].reload / S.DT) + 3);
+  assert.ok(!a.reloading);
+  assert.equal(a.wp[0].mag, 30);
+  assert.equal(a.wp[0].res, res0 - 30);
+}
+
+// 7. Дробовик: несколько дробин, урон складывается.
+{
+  const { room, a, b } = duel();
+  a.weapon = 2; a.x = -3; // 8 м до цели
+  room.fire(a, Date.now());
+  assert.ok(b.hp < 100 && b.hp <= 100 - S.WEAPONS[2].dmg, `дробовик не попал: hp=${b.hp}`);
+}
+
+// 8. Полный матч с ботами: бои, события, итоги и перезапуск.
+{
+  const room = new Room(4);
+  const sock = fakeSock();
+  const me = room.addHuman(sock, 'Наблюдатель');
+  room.fillBots();
+  const start = new Map([...room.players.values()].filter((p) => p.bot).map((p) => [p.id, [p.x, p.z]]));
+  tickN(room, S.TICK * 20);
+  let moved = 0;
+  for (const p of room.players.values()) {
+    if (!p.bot) continue;
+    const s = start.get(p.id);
+    if (s && Math.hypot(p.x - s[0], p.z - s[1]) > 2) moved++;
+  }
+  assert.ok(moved >= 3, `боты почти не двигаются: ${moved}`);
+  assert.ok(sock.count('shot') > 5, `боты не стреляют: ${sock.count('shot')}`);
+  for (const p of room.players.values()) {
+    assert.ok(Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z), 'NaN позиция');
+    assert.ok(Math.abs(p.x) <= 32 && Math.abs(p.z) <= 22, `вне карты: ${p.x},${p.z}`);
+  }
+  // доигрываем до конца матча
+  me.alive = true;
+  let ticks = 0;
+  while (room.state === 0 && ticks++ < S.TICK * (S.MATCH.time + 5)) room.tick();
+  assert.equal(room.state, 1, 'матч не завершился');
+  assert.equal(sock.count('over'), 1);
+  assert.ok(room.scores[0] + room.scores[1] > 0, 'за матч не было ни одного убийства');
+  tickN(room, S.TICK * (S.MATCH.over + 1));
+  assert.equal(room.state, 0, 'новый матч не начался');
+  assert.deepEqual(room.scores, [0, 0]);
+  assert.ok(sock.count('start') >= 1);
+}
+
+// 9. Подпись Telegram initData.
+{
+  const token = '123456:TEST-TOKEN';
+  const user = JSON.stringify({ id: 42, first_name: 'Иван', username: 'ivan' });
+  const fields = { auth_date: String(Math.floor(Date.now() / 1000)), query_id: 'AAH', user };
+  const dcs = Object.entries(fields).map(([k, v]) => `${k}=${v}`).sort().join('\n');
+  const secret = crypto.createHmac('sha256', 'WebAppData').update(token).digest();
+  const hash = crypto.createHmac('sha256', secret).update(dcs).digest('hex');
+  const good = new URLSearchParams({ ...fields, hash }).toString();
+  assert.equal(verifyInitData(good, token)?.id, 42);
+  assert.equal(verifyInitData(good, 'другой-токен'), null);
+  assert.equal(verifyInitData(good.replace('Aya', 'x') + 'x', token), null);
+  const tampered = new URLSearchParams({ ...fields, user: JSON.stringify({ id: 43 }), hash }).toString();
+  assert.equal(verifyInitData(tampered, token), null);
+  const old = new URLSearchParams({ ...fields, auth_date: '1000', hash }).toString();
+  assert.equal(verifyInitData(old, token), null);
+}
+
+console.log('game.test.js: все проверки пройдены');

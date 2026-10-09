@@ -1,33 +1,49 @@
-name: Unpack zip
+name: Распаковать arena-fire.zip
+
 on:
   push:
-    paths: ['*.zip']
+    paths:
+      - 'arena-fire.zip'
+  workflow_dispatch:
+
 permissions:
   contents: write
+
 jobs:
   unpack:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Unpack
+
+      - name: Проверить архив
         run: |
-          set -e
-          for z in *.zip; do
-            tmp=$(mktemp -d)
-            unzip -q "$z" -d "$tmp"
-            n=$(ls -A "$tmp" | wc -l)
-            if [ "$n" -eq 1 ] && [ -d "$tmp/$(ls -A "$tmp")" ]; then
-              src="$tmp/$(ls -A "$tmp")"
-            else
-              src="$tmp"
-            fi
-            cp -a "$src"/. .
-            rm -f "$z"
-          done
-      - name: Commit
+          test -f arena-fire.zip || { echo "В репозитории нет arena-fire.zip"; exit 1; }
+
+      - name: Распаковать и заменить файлы
         run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@users.noreply.github.com"
+          rm -rf /tmp/unpacked
+          mkdir /tmp/unpacked
+          unzip -o -q arena-fire.zip -d /tmp/unpacked
+          SRC=/tmp/unpacked
+          if [ -d /tmp/unpacked/arena-fire ]; then SRC=/tmp/unpacked/arena-fire; fi
+          test -f "$SRC/server.js" || { echo "В архиве нет server.js"; exit 1; }
+          rsync -a --delete \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude 'arena-fire.zip' \
+            "$SRC"/ ./
+
+      - name: Убрать архив и сохранить изменения
+        run: |
+          git rm -q --cached arena-fire.zip || true
+          rm -f arena-fire.zip
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "Unpack archive" || exit 0
-          git push
+          if git diff --cached --quiet; then
+            echo "Изменений нет"
+          else
+            git commit -m "Обновление игры из arena-fire.zip"
+            git push
+          fi

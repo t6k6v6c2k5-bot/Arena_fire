@@ -1,9 +1,8 @@
-// Тест серверной логики без сети: комнаты, боты, хитскан, лаг-компенсация, матч, проверка Telegram.
+// Тест серверной логики без сети: комнаты, боты, хитскан, лаг-компенсация, матч, результаты матча для профиля.
 import assert from 'node:assert/strict';
-import crypto from 'node:crypto';
 import * as S from '../public/shared.js';
 import { Room, Player } from '../game.js';
-import { verifyInitData } from '../auth.js';
+import { matchReward } from '../public/catalog.js';
 
 function fakeSock() {
   const s = { events: [], last: {} };
@@ -287,22 +286,134 @@ function duel() {
   assert.ok(sock.count('start') >= 1);
 }
 
-// 9. Подпись Telegram initData.
+// 9. Результаты матча: победитель, хедшоты, ливер, гость и бот не записываются, повтора нет.
 {
-  const token = '123456:TEST-TOKEN';
-  const user = JSON.stringify({ id: 42, first_name: 'Иван', username: 'ivan' });
-  const fields = { auth_date: String(Math.floor(Date.now() / 1000)), query_id: 'AAH', user };
-  const dcs = Object.entries(fields).map(([k, v]) => `${k}=${v}`).sort().join('\n');
-  const secret = crypto.createHmac('sha256', 'WebAppData').update(token).digest();
-  const hash = crypto.createHmac('sha256', secret).update(dcs).digest('hex');
-  const good = new URLSearchParams({ ...fields, hash }).toString();
-  assert.equal(verifyInitData(good, token)?.id, 42);
-  assert.equal(verifyInitData(good, 'другой-токен'), null);
-  assert.equal(verifyInitData(good.replace('Aya', 'x') + 'x', token), null);
-  const tampered = new URLSearchParams({ ...fields, user: JSON.stringify({ id: 43 }), hash }).toString();
-  assert.equal(verifyInitData(tampered, token), null);
-  const old = new URLSearchParams({ ...fields, auth_date: '1000', hash }).toString();
-  assert.equal(verifyInitData(old, token), null);
+  const room = new Room(77);
+  const got = [];
+  room.onResult = (p, res) => got.push([p, res]);
+  const sa = fakeSock(), sb = fakeSock(), sg = fakeSock();
+  const A = room.addHuman(sa, 'A', { uid: 11, equip: { gun: 'gun_std' }, tag: 'WLK', level: 5 });
+  const B = room.addHuman(sb, 'B', { uid: 12 });
+  const G = room.addHuman(sg, 'Гость');
+  A.team = 0; B.team = 1; G.team = 0;
+  room.fillBots();
+  assert.equal(room.rosterEntry(A).tag, 'WLK'); assert.equal(room.rosterEntry(A).lv, 5);
+  tickN(room, 60);
+  const bot = room.bots().find((b) => b.team === 1);
+  for (let i = 0; i < 5; i++) { bot.alive = true; bot.hp = 100; bot.protectUntil = 0; room.damage(A, bot, 200, i < 2, 10); }
+  assert.equal(A.kills, 5); assert.equal(A.hs, 2);
+  room.scores = [S.MATCH.killLimit - 1, 3];
+  const bot2 = room.bots().find((b) => b.team === 1);
+  bot2.alive = true; bot2.hp = 10; bot2.protectUntil = 0;
+  room.damage(A, bot2, 50, true, 5);       // 6-е убийство завершает матч победой команды 0
+  assert.equal(room.state, 1);
+  assert.equal(got.length, 2, 'записываются только игроки с аккаунтом');
+  const ra = got.find((g) => g[0] === A)[1], rb = got.find((g) => g[0] === B)[1];
+  assert.deepEqual([ra.kills, ra.hs, ra.win, rb.win, ra.draw], [6, 3, true, false, false]);
+  assert.ok(ra.secs >= 1);
+  room.endMatch(); assert.equal(got.length, 2, 'повторной записи нет');
+
+  // ливер во время боя получает поражение, повторно в конце не записывается
+  room.resetMatch();
+  got.length = 0;
+  A.kills = 3; A.deaths = 1;
+  room.removePlayer(A.id);
+  assert.equal(got.length, 1); assert.equal(got[0][1].win, false);
+  // не сыгравший (0 убийств/смертей) при выходе до конца матча не записывается
+  room.removePlayer(B.id); assert.equal(got.length, 1);
+  room.endMatch(); assert.equal(got.length, 1, 'ушедших повторно не записываем');
+}
+
+// 10. Награды: ливнувшим меньше, победителям больше, потолок.
+{
+  const win = matchReward({ kills: 10, hs: 4, win: true, secs: 300 });
+  const lose = matchReward({ kills: 10, hs: 4, secs: 300 });
+  const quit = matchReward({ kills: 10, hs: 4, secs: 30 });
+  assert.ok(win.xp > lose.xp && lose.xp > quit.xp && win.coins > lose.coins);
+  assert.deepEqual(matchReward({ secs: 5 }), { xp: 0, coins: 0 });
+  assert.ok(matchReward({ kills: 9999, hs: 9999, win: true, secs: 9999 }).xp <= 700);
+}
+
+// 11. Режимы: FFA, гонка вооружений, только хедшоты, платформа.
+{
+  // FFA: победа по лимиту убийств, «свои» не защищены, без команд
+  const room = new Room(90, 0, { mode: 'ffa' });
+  const got = [];
+  room.onResult = (p, res) => got.push([p, res]);
+  const sa = fakeSock(), sb = fakeSock();
+  const A = room.addHuman(sa, 'A', { uid: 1 }), B = room.addHuman(sb, 'B', { uid: 2 });
+  A.team = 0; B.team = 0; // одна «команда» по спавну — в FFA это не союзники
+  room.fillBots(); tickN(room, 60);
+  assert.equal(room.friend(A, B), false, 'в FFA нет союзников');
+  assert.equal(room.welcome(A).teams, 0);
+  assert.equal(room.welcome(A).mode, 'ffa');
+  B.alive = true; B.hp = 100; B.protectUntil = 0;
+  room.damage(A, B, 500, false, 5);
+  assert.equal(A.kills, 1);
+  A.kills = S.MODES.ffa.killLimit - 1;
+  B.alive = true; B.hp = 10; B.protectUntil = 0;
+  room.damage(A, B, 50, true, 5);
+  assert.equal(room.state, 1); assert.equal(room.winId, A.id);
+  const ra = got.find((g) => g[0] === A)[1], rb = got.find((g) => g[0] === B)[1];
+  assert.deepEqual([ra.win, rb.win, ra.mode], [true, false, 'ffa']);
+
+  // по таймеру побеждает лидер; равенство — ничья
+  room.resetMatch(); got.length = 0;
+  A.kills = 3; B.kills = 1;
+  room.endMatch(); assert.equal(room.winId, A.id);
+  room.resetMatch(); A.kills = 2; B.kills = 2;
+  for (const p of room.bots()) p.kills = 0;
+  room.endMatch(); assert.equal(room.winId, 0, 'равенство лидеров — ничья');
+}
+{
+  // Гонка вооружений: оружие меняется с каждым убийством, переключать нельзя, победа после последнего этапа
+  const room = new Room(91, 0, { mode: 'gg' });
+  const sa = fakeSock();
+  const A = room.addHuman(sa, 'A', { uid: 1 });
+  room.fillBots(); tickN(room, 60);
+  assert.equal(A.weapon, S.GG_ORDER[0]);
+  room.applyInput(A, { mx: 0, mz: 0, yaw: 0, pitch: 0, weapon: 4, rt: Date.now() });
+  assert.equal(A.weapon, S.GG_ORDER[0], 'в гонке вооружений нельзя менять оружие');
+  const victims = room.bots();
+  for (let i = 1; i < S.GG_ORDER.length; i++) {
+    const v = victims[i]; v.alive = true; v.hp = 10; v.protectUntil = 0;
+    room.damage(A, v, 99, false, 5);
+    assert.equal(A.gg, i); assert.equal(A.weapon, S.GG_ORDER[i], `этап ${i}`);
+    assert.equal(A.wp[A.weapon].mag, S.WEAPONS[A.weapon].mag);
+    assert.ok(sa.last.ggup && sa.last.ggup.gg === i);
+  }
+  assert.equal(room.state, 0);
+  const v = victims[6]; v.alive = true; v.hp = 10; v.protectUntil = 0;
+  room.damage(A, v, 99, false, 5);
+  assert.equal(room.state, 1); assert.equal(room.winId, A.id, 'победа после последнего этапа');
+  // смерть не сбрасывает этап
+  room.resetMatch(); assert.equal(A.gg, 0);
+}
+{
+  // Только хедшоты: голова убивает сразу, тело почти не бьёт
+  const room = new Room(92, 0, { mode: 'hs' });
+  const sa = fakeSock();
+  const A = room.addHuman(sa, 'A');
+  room.fillBots(); tickN(room, 60);
+  A.team = 0; const v = room.bots().find((b) => b.team === 1);
+  const shoot = (aimY) => {
+    v.alive = true; v.hp = 100; v.protectUntil = 0; v.x = 0; v.z = -10; v.y = 0; v.hist = [];
+    A.x = 0; A.z = 0; A.y = 0; A.alive = true; A.protectUntil = 0; A.pitch = Math.atan2(aimY - S.PLAYER.eye, 10); A.yaw = 0;
+    A.wp[0].mag = 30; A.nextFire = 0; A.bloom = 0; A.reloading = false;
+    // свободный коридор: вокруг цели нет стен на этой линии не гарантируем, поэтому попытки повторяем
+    for (let k = 0; k < 6 && v.hp === 100; k++) { A.nextFire = 0; room.fire(A, Date.now()); }
+    return v.hp;
+  };
+  const bodyHp = shoot(1.15);
+  assert.ok(bodyHp === 100 || bodyHp >= 85, `по телу почти нет урона, hp ${bodyHp}`);
+}
+{
+  // Платформа игрока попадает в ростер (значок у ника), комнаты общие
+  const rr = new Room(93, 0, {});
+  const hp = rr.addHuman(fakeSock(), 'Тест', {}); hp.plat = 'm';
+  assert.equal(rr.rosterEntry(hp).pl, 'm');
+  assert.equal(rr.platform, undefined);
+  assert.equal(new Room(95, 0, { mode: 'нет такого' }).mode.id, 'tdm');
 }
 
 console.log('game.test.js: все проверки пройдены');

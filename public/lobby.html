@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0c1216">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Arena Fire">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<title>Лобби — Arena Fire</title>
+<meta name="description" content="Быстрая игра, комнаты и чат">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=Tektur:wght@500;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/site.css">
+<script src="/socket.io/socket.io.js" defer></script>
+</head>
+<body>
+<main class="wrap">
+  <div class="pagehead"><h1>Лобби</h1><div class="plat" id="plat"></div></div>
+  <div class="grid" style="grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr);align-items:start" id="cols">
+    <div class="grid" style="align-content:start">
+      <div class="card"><h3>Быстрая игра</h3>
+        <div class="modes" id="modes" style="margin-bottom:16px"></div>
+        <div class="row" style="align-items:end"><label class="f" style="flex:1;margin:0">Сложность ботов<select id="qSkill"><option value="0">Лёгкие</option><option value="1">Средние</option><option value="2">Сложные</option></select></label>
+        <a class="btn big" id="qGo" href="#">В бой</a></div>
+        <p class="muted small" style="margin:12px 0 0">Подберём бой, а если людей пока мало, свободные места займут боты.</p></div>
+      <div class="card"><h3>Открытые комнаты <span class="muted small" id="rc"></span></h3><div class="rooms" id="rooms"><div class="muted">Загрузка…</div></div></div>
+      <div class="card"><h3>Чат лобби</h3><div class="chat" id="chat"></div>
+        <form class="row" id="cf" style="margin-top:10px"><input id="ci" maxlength="200" placeholder="Сообщение" autocomplete="off"><button class="btn" type="submit">Отправить</button></form></div>
+    </div>
+    <div class="grid" style="align-content:start">
+      <div class="card" id="me"></div>
+      <div class="card"><h3>Своя комната</h3>
+        <label class="f">Название<input id="cName" maxlength="24" placeholder="Моя арена"></label>
+        <label class="f" style="display:flex;align-items:center"><input type="checkbox" id="cPriv">Приватная: вход только по коду</label>
+        <p class="muted small" id="cInfo">Режим и сложность — как выбрано слева.</p>
+        <a class="btn full" id="cGo" href="#">Создать комнату</a></div>
+      <div class="card"><h3>Войти по коду</h3>
+        <div class="row"><input id="code" maxlength="5" placeholder="ABCDE" autocapitalize="characters" style="text-transform:uppercase"><a class="btn" id="jGo" href="#">Войти</a></div>
+        <p class="muted small" style="margin:10px 0 0">Скиньте код другу, и он зайдёт к вам с любого устройства.</p></div>
+    </div>
+  </div>
+</main>
+<style>@media (max-width: 900px) { #cols { grid-template-columns: 1fr !important; } }</style>
+
+<script type="module">
+import { boot, api, esc, fmt, toast, tagHtml, lvlHtml, kd, pct, nextUrl, getMe, store, platform, detectPlatform, ICON, MODE_ICON, $, $$ } from '/site.js';
+
+const u = await boot('/lobby', { need: true });
+const SK = ['Лёгкие', 'Средние', 'Сложные'];
+const MODES = [
+  ['tdm', 'Командный бой', 'Команды по четыре, до 40 убийств'],
+  ['hs', 'Только хедшоты', 'Считается только голова'],
+  ['ffa', 'Каждый за себя', 'Все против всех, до 20 убийств'],
+  ['gg', 'Гонка вооружений', 'Новое оружие за каждое убийство'],
+];
+const urlGm = new URLSearchParams(location.search).get('gm');
+let gm = MODES.some((m) => m[0] === urlGm) ? urlGm : store.get('af_gm', 'tdm');
+if (!MODES.some((m) => m[0] === gm)) gm = 'tdm';
+function renderModes() {
+  $('#modes').innerHTML = MODES.map(([id, n, d]) => `<div class="mode ${id === gm ? 'sel' : ''}" data-gm="${id}" role="button" tabindex="0"><div class="ic">${MODE_ICON[id]}</div><div><h3>${n}</h3><p>${d}</p></div></div>`).join('');
+}
+renderModes();
+$('#modes').addEventListener('click', (e) => { const m = e.target.closest('.mode'); if (!m) return; gm = m.dataset.gm; store.set('af_gm', gm); renderModes(); });
+$('#modes').addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.target.click?.(); } });
+
+const plat = platform();
+$('#plat').innerHTML = `${plat === 'pc' ? ICON.pc : ICON.phone}<span>${plat === 'pc' ? 'Играете с компьютера' : 'Играете с телефона'}</span> <a href="/settings" class="small">изменить</a>`;
+
+function renderMe(u, daily) {
+  $('#me').innerHTML = `<div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline;flex-wrap:wrap"><h3 style="margin:0">${tagHtml(u.clan && u.clan.tag)}${esc(u.nick)}</h3><span class="coin"><b>🪙 ${fmt(u.coins)}</b></span></div>
+    <div style="margin:14px 0">${lvlHtml(u)}</div>
+    <div class="muted small">Убийств: <b>${fmt(u.kills)}</b> · Побед: <b>${fmt(u.wins)}</b> · K/D: <b>${kd(u.kills, u.deaths)}</b></div>
+    <div id="dl" style="margin-top:14px"></div>`;
+  if (daily.available) {
+    $('#dl').innerHTML = `<button class="btn full" id="dbtn">Забрать бонус: ${daily.next} монет</button>`;
+    $('#dbtn').onclick = async () => { try { const r = await api('/daily', {}); toast(`Получено ${r.coins} монет. Серия: ${r.streak} дн.`, 'good'); renderMe(r.user, r.daily); } catch (e) { toast(e.message, 'bad'); } };
+  } else $('#dl').innerHTML = '<div class="muted small">Бонус на сегодня получен. Следующий будет завтра.</div>';
+}
+renderMe(u, (await getMe()).daily);
+
+const go = (q) => { location.href = '/play?' + new URLSearchParams(q); };
+$('#qSkill').value = store.get('af_skill', '0');
+$('#qGo').onclick = (e) => { e.preventDefault(); store.set('af_skill', $('#qSkill').value); go({ mode: 'quick', skill: $('#qSkill').value, gm }); };
+$('#cGo').onclick = (e) => { e.preventDefault(); go({ mode: 'create', skill: $('#qSkill').value, gm, rn: $('#cName').value.trim(), priv: $('#cPriv').checked ? 1 : 0 }); };
+$('#jGo').onclick = (e) => { e.preventDefault(); const c = $('#code').value.trim().toUpperCase(); if (c.length !== 5) return toast('Код состоит из 5 символов', 'bad'); go({ mode: 'code', code: c }); };
+
+async function loadRooms() {
+  try {
+    const { rooms } = await api('/rooms');
+    $('#rc').textContent = rooms.length ? `(${rooms.length})` : '';
+    $('#rooms').innerHTML = rooms.length ? rooms.map((r) => `<div class="room"><div class="nm">${esc(r.name)}<small>${esc(r.modeName)} · ${SK[r.skill]} · ${r.state ? 'итоги матча' : 'идёт бой, ' + Math.floor(r.rem / 60) + ':' + String(r.rem % 60).padStart(2, '0')}</small></div><span class="chip">${r.humans}/${r.max}</span><a class="btn sm ${r.humans >= r.max ? 'ghost' : ''}" href="/play?mode=room&room=${r.id}">Войти</a></div>`).join('')
+      : '<div class="muted">Открытых комнат пока нет. Нажмите «В бой» или создайте свою.</div>';
+  } catch { /* повторим */ }
+}
+loadRooms(); setInterval(loadRooms, 4000);
+
+await new Promise((res) => { if (window.io) return res(); const s = document.createElement('script'); s.src = '/socket.io/socket.io.js'; s.onload = res; s.onerror = res; document.head.appendChild(s); });
+const chat = $('#chat');
+const addMsg = (m) => { const d = document.createElement('div'); d.innerHTML = `${tagHtml(m.tag)}<b>${esc(m.nick)}</b> ${esc(m.text)}`; chat.appendChild(d); while (chat.children.length > 80) chat.firstChild.remove(); chat.scrollTop = chat.scrollHeight; };
+if (window.io) {
+  const sock = io({ transports: ['websocket', 'polling'] });
+  sock.on('connect', () => sock.emit('lobby'));
+  sock.on('chat:history', (h) => { chat.innerHTML = ''; h.forEach(addMsg); });
+  sock.on('chat', addMsg);
+  $('#cf').onsubmit = (e) => { e.preventDefault(); const t = $('#ci').value.trim(); if (t) { sock.emit('chat', t); $('#ci').value = ''; } };
+} else $('#cf').classList.add('hidden');
+</script>
+</body>
+</html>

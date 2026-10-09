@@ -167,3 +167,22 @@ body:not(.touch-ui) .wb b { font-size: 10px; }
 
 #hitm.lg::before, #hitm.lg::after { background: #facc15; }
 #dmgnums .n.lg { color: #facc15; font-size: 17px; }
+
+/* --- страницы входа в бой --- */
+.linkbtn{display:block;text-align:center;text-decoration:none;margin-top:8px}
+.who{color:#9fb3c8;font-size:14px;margin:6px 0 10px}
+.reward{color:#ffd166;font-weight:700;margin:10px 0 4px;min-height:1.2em}
+
+#modeTag { position: absolute; top: 100%; left: 50%; transform: translateX(-50%); margin-top: 4px; font-size: 12px; font-weight: 700; letter-spacing: .04em; color: rgba(255,255,255,.7); text-shadow: 0 1px 3px #000; white-space: nowrap; pointer-events: none; }
+
+/* --- оформление меню под сайт («Полигон») --- */
+.overlay { font-family: "Onest", system-ui, sans-serif; background: radial-gradient(900px 500px at 15% 0%, rgba(227,176,75,.14), transparent 60%), linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px) 0 0/40px 40px, linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px) 0 0/40px 40px, #0c1216; }
+.overlay .card { background: #16212a; border: 1px solid #2a3a45; border-radius: 8px; padding: 22px 20px; }
+h1, h2, .primary, .secondary { font-family: "Tektur", "Arial Narrow", system-ui, sans-serif; }
+h1 span { color: #e3b04b; }
+.primary { color: #1a1204; background: linear-gradient(180deg, #f1c96e, #e3b04b); border-radius: 0; clip-path: polygon(12px 0, 100% 0, calc(100% - 12px) 100%, 0 100%); box-shadow: none; letter-spacing: 1px; }
+.secondary { border-radius: 6px; border: 1px solid #3a4d5a; background: rgba(255,255,255,.06); letter-spacing: .5px; }
+#status { color: #f1c96e; } .hint { color: #f1c96e; background: rgba(227,176,75,.1); }
+.who { color: #8fa1a8; }
+#nameInput { border-radius: 6px; background: #0a1014; border-color: #2a3a45; }
+.slider select { border-radius: 6px; background: #0a1014; border-color: #2a3a45; }

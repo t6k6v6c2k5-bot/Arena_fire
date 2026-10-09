@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0c1216">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Arena Fire">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<title>Кланы — Arena Fire</title>
+<meta name="description" content="Создайте клан или вступите в существующий">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=Tektur:wght@500;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/site.css">
+</head>
+<body>
+<main class="wrap"><div class="pagehead"><h1>Кланы</h1><div id="mine"></div></div>
+<div class="grid g2"><div class="card"><h3>Все кланы</h3><div class="row" style="margin-bottom:12px"><input id="q" placeholder="Поиск по названию или тегу"></div><div class="tscroll"><table class="tbl" id="t"></table></div></div>
+<div class="card" id="create"><h3>Создать клан</h3><p class="muted small" id="cost"></p>
+<form id="cf" novalidate><label class="f">Название<input name="name" maxlength="20" placeholder="Волки пустыни"></label>
+<label class="f">Тег (2–4 латинские буквы или цифры)<input name="tag" maxlength="4" style="text-transform:uppercase" placeholder="WLF"></label>
+<label class="f">Описание<input name="descr" maxlength="120" placeholder="Необязательно"></label>
+<div class="err" id="err"></div><button class="btn full" type="submit">Создать</button></form></div></div></main>
+<script type="module">
+import { boot, api, esc, fmt, toast, tagHtml, lvlHtml, kd, pct, nextUrl, getMe, $, $$ } from '/site.js';
+
+const u = await boot('/clans');
+if (u && u.clan) $('#mine').innerHTML = `<a class="btn" href="/clan/${u.clan.id}">Мой клан: ${esc(u.clan.tag)}</a>`;
+if (!u) $('#create').innerHTML = '<h3>Создать клан</h3><p class="muted">Чтобы создать клан или вступить, <a href="/login?next=/clans">войдите</a> в аккаунт.</p>';
+else if (u.clan) $('#create').classList.add('hidden');
+let cost = 500;
+async function load() {
+  const { clans, cost: c, max } = await api('/clans?q=' + encodeURIComponent($('#q').value.trim()));
+  cost = c; if ($('#cost')) $('#cost').textContent = `Стоимость создания: ${fmt(c)} монет. До ${max} участников.`;
+  $('#t').innerHTML = '<thead><tr><th>Клан</th><th class="r">Игроков</th><th class="r">Опыт</th></tr></thead><tbody>' + (clans.length ? clans.map((x) => `<tr><td><span class="tag">${esc(x.tag)}</span><a href="/clan/${x.id}">${esc(x.name)}</a><div class="muted small">${esc(x.descr)}</div></td><td class="r">${x.members}</td><td class="r">${fmt(x.xp)}</td></tr>`).join('') : '<tr><td colspan="3" class="muted">Ничего не найдено</td></tr>') + '</tbody>';
+}
+let qt; $('#q').addEventListener('input', () => { clearTimeout(qt); qt = setTimeout(load, 250); });
+load().catch((e) => toast(e.message, 'bad'));
+$('#cf')?.addEventListener('submit', async (e) => {
+  e.preventDefault(); const v = Object.fromEntries(new FormData(e.target)); $('#err').textContent = '';
+  try { const r = await api('/clans', v); location.href = '/clan/' + r.id; } catch (x) { $('#err').textContent = x.message; }
+});
+</script>
+</body>
+</html>

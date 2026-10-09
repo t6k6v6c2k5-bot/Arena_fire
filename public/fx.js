@@ -130,9 +130,9 @@ export function createFx(scene) {
   // ---------- трассеры (светящийся отрезок, летящий к цели) ----------
   const tGeo = new THREE.CylinderGeometry(1, 1, 1, 4, 1);
   tGeo.rotateX(Math.PI / 2);
-  const tMat = new THREE.MeshBasicMaterial({ color: 0xffe3a0, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, fog: false });
   const tracers = [];
   for (let i = 0; i < 20; i++) {
+    const tMat = new THREE.MeshBasicMaterial({ color: 0xffe3a0, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, fog: false });
     const m = new THREE.Mesh(tGeo, tMat);
     m.rotation.order = 'YXZ';
     m.visible = false; m.frustumCulled = false;
@@ -140,7 +140,7 @@ export function createFx(scene) {
     tracers.push({ m, on: false, ox: 0, oy: 0, oz: 0, dx: 0, dy: 0, dz: 0, len: 0, head: 0, seg: 6, speed: 300 });
   }
   let tIdx = 0;
-  fx.tracer = (a, b, speed = 300) => {
+  fx.tracer = (a, b, speed = 300, color = 0xffe3a0) => {
     const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
     const len = Math.hypot(dx, dy, dz);
     if (len < 0.5) return;
@@ -148,6 +148,7 @@ export function createFx(scene) {
     t.on = true; t.ox = a.x; t.oy = a.y; t.oz = a.z;
     t.dx = dx / len; t.dy = dy / len; t.dz = dz / len;
     t.len = len; t.head = 0; t.seg = Math.min(7, len * 0.5); t.speed = speed;
+    t.m.material.color.setHex(color);
     t.m.visible = true;
   };
 

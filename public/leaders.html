@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0c1216">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Arena Fire">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<title>Рейтинг — Arena Fire</title>
+<meta name="description" content="Лучшие игроки и кланы">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=Tektur:wght@500;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/site.css">
+</head>
+<body>
+<main class="wrap"><div class="pagehead"><h1>Рейтинг</h1></div>
+<div class="tabs" id="tabs"><button data-by="xp">По уровню</button><button data-by="kills">По убийствам</button><button data-by="wins">По победам</button><button data-by="headshots">По хедшотам</button><button data-by="clans">Кланы</button></div>
+<div class="card"><div class="tscroll"><table class="tbl" id="t"></table></div></div></main>
+<script type="module">
+import { boot, api, esc, fmt, toast, tagHtml, lvlHtml, kd, pct, nextUrl, getMe, $, $$ } from '/site.js';
+
+const me = await boot('/leaders');
+let by = 'xp';
+async function load() {
+  $$('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.by === by));
+  const t = $('#t'); t.innerHTML = '<tr><td class="muted">Загрузка…</td></tr>';
+  try {
+    if (by === 'clans') {
+      const { clans } = await api('/clans');
+      t.innerHTML = '<thead><tr><th>#</th><th>Клан</th><th class="r">Игроков</th><th class="r">Убийств</th><th class="r">Опыт</th></tr></thead><tbody>' +
+        (clans.length ? clans.map((c, i) => `<tr><td>${i + 1}</td><td><span class="tag">${esc(c.tag)}</span><a href="/clan/${c.id}">${esc(c.name)}</a></td><td class="r">${c.members}</td><td class="r">${fmt(c.kills)}</td><td class="r">${fmt(c.xp)}</td></tr>`).join('') : '<tr><td colspan="5" class="muted">Кланов пока нет</td></tr>') + '</tbody>';
+      return;
+    }
+    const d = await api('/leaderboard?by=' + by);
+    t.innerHTML = '<thead><tr><th>#</th><th>Игрок</th><th class="r">Ур.</th><th class="r">Убийств</th><th class="r">K/D</th><th class="r">Побед</th><th class="r">Хедшотов</th></tr></thead><tbody>' +
+      (d.rows.length ? d.rows.map((r, i) => `<tr class="${me && me.id === r.id ? 'me' : ''}"><td>${i + 1}</td><td>${tagHtml(r.clan_tag)}<a href="/profile/${encodeURIComponent(r.nick)}">${esc(r.nick)}</a></td><td class="r">${r.level}</td><td class="r">${fmt(r.kills)}</td><td class="r">${kd(r.kills, r.deaths)}</td><td class="r">${fmt(r.wins)}</td><td class="r">${fmt(r.headshots)}</td></tr>`).join('') : '<tr><td colspan="7" class="muted">Пока никто не сыграл матч</td></tr>') + '</tbody>';
+  } catch (e) { t.innerHTML = `<tr><td class="err">${esc(e.message)}</td></tr>`; }
+}
+$$('#tabs button').forEach((b) => b.addEventListener('click', () => { by = b.dataset.by; load(); }));
+load();
+</script>
+</body>
+</html>

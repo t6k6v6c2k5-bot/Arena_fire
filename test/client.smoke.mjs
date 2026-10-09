@@ -53,13 +53,18 @@ globalThis.document = {
 };
 const winHandlers = {};
 globalThis.window = globalThis;
+globalThis.location = { search: '?gm=' + (process.env.SMOKE_MODE || 'tdm'), pathname: '/play' };
 globalThis.addEventListener = (t, fn) => { (winHandlers[t] ??= []).push(fn); };
 globalThis.innerWidth = 844; globalThis.innerHeight = 390; globalThis.devicePixelRatio = 2;
 globalThis.matchMedia = () => ({ matches: true }); // тач-режим
 globalThis.localStorage = { getItem: () => null, setItem() {} };
+globalThis.kitLoaded = false;
+globalThis.fetch = async (u) => { assert.equal(u, '/world/kit.json'); globalThis.kitLoaded = true; return { json: async () => JSON.parse((await import('node:fs')).readFileSync(new URL('../public/world/kit.json', import.meta.url), 'utf8')) }; };
 let rafCb = null;
 globalThis.requestAnimationFrame = (fn) => { rafCb = fn; return 1; };
 
+const SMOKE_MODE = process.env.SMOKE_MODE || 'tdm'; // tdm | hs | ffa | gg
+const GG = SMOKE_MODE === 'gg';
 // ---------- «сеть»: клиент <-> настоящий Room ----------
 const LAT = 3; // кадров задержки в каждую сторону (~50 мс)
 let frameNo = 0;
@@ -94,9 +99,9 @@ function pump() {
     toServer.splice(i, 1);
     if (m.ev === 'join') {
       joinData = m.data;
-      room = new Room(1, m.data.skill);
+      room = new Room(1, m.data.skill, { mode: SMOKE_MODE, platform: m.data.touch ? 'mobile' : 'pc' });
       human = room.addHuman(serverSock, m.data.name);
-      human.assist = m.data.touch ? 1 : 0.3;
+      human.assist = m.data.touch ? 1 : 0;
       room.fillBots();
       serverSock.emit('welcome', room.welcome(human));
     } else if (m.ev === 'input' && human) room.queueInput(human, m.data);
@@ -157,6 +162,11 @@ assert.equal(room.skill.name, 'Лёгкие');
 assert.ok(received.snap > 5, `снапшотов получено: ${received.snap}`);
 assert.equal(A.remotes.size, S.MATCH.botsTotal - 1, `моделей других игроков: ${A.remotes.size}`);
 assert.equal(A.alive, true);
+assert.equal(joinData.gm, SMOKE_MODE, 'режим не передан серверу');
+assert.equal(A.mode, SMOKE_MODE, 'клиент не узнал режим');
+assert.equal(A.teams, SMOKE_MODE === 'tdm' || SMOKE_MODE === 'hs');
+assert.equal(A.gun, GG);
+if (!A.teams) for (const r of A.remotes.values()) assert.equal(r.team, r.team); // у всех соперников одинаковый вид, команды не нужны
 
 // 3. Движение с предсказанием: идём вперёд, сервер и клиент должны сходиться.
 const dir = human.team === 0 ? -Math.PI / 2 : Math.PI / 2;
@@ -194,6 +204,7 @@ assert.ok(human.wp[0].mag < mag0, `сервер не списал патроны
 assert.ok(A.info.wp[0][0] < mag0, `клиент не видит расход патронов: ${A.info.wp[0][0]}`);
 assert.ok(received.shot > 3, `событий shot: ${received.shot}`);
 
+if (!GG) {
 // 4b. Попадание по неподвижной цели через весь конвейер (тач-кнопка → сервер с лагом → hit у клиента).
 {
   const enemy = [...room.players.values()].find((p) => p.bot && p.team !== human.team);
@@ -336,13 +347,30 @@ assert.ok(audioStats.osc > 20 && audioStats.src > 20, `звуков синтез
   assert.deepEqual(surfaceInfo(10, 0, 10, 0, -1, 0).n, [0, 1, 0], 'пол');
 }
 
+}
+
+if (GG) {
+  // Гонка вооружений: убийство на сервере → клиент сам берёт новое оружие
+  const v = [...room.players.values()].find((p) => p.bot && p.alive);
+  for (let i = 0; i < 400 && !human.alive; i++) runFrames(1);
+  const w0 = A.sel;
+  v.hp = 5; v.protectUntil = 0;
+  room.damage(human, v, 50, false, 5);
+  runFrames(30);
+  assert.equal(human.gg, 1); assert.equal(A.sel, S.GG_ORDER[1], 'клиент не сменил оружие после убийства');
+  assert.notEqual(A.sel, w0);
+  press('Digit5'); runFrames(10); release('Digit5');
+  assert.equal(A.sel, S.GG_ORDER[1], 'в гонке вооружений клавиши оружия не работают');
+}
+
 // 6. Таблица счёта (Tab) и тач-переключатель.
 press('Tab'); runFrames(5); release('Tab'); runFrames(5);
 ptr('bScore', 'pointerdown'); ptr('bScore', 'pointerup'); runFrames(5);
 ptr('bScore', 'pointerdown'); ptr('bScore', 'pointerup'); runFrames(5);
 
 // 7. Смерть и возрождение.
-const killer = [...room.players.values()].find((p) => p.bot && p.team !== human.team);
+for (let i = 0; i < 400 && !human.alive; i++) runFrames(1); // боты могли успеть убить игрока раньше
+const killer = [...room.players.values()].find((p) => p.bot && p.team !== human.team && p.alive) || [...room.players.values()].find((p) => p.bot && p.team !== human.team);
 human.protectUntil = 0;
 room.damage(killer, human, 500, true);
 runFrames(15);
@@ -367,5 +395,6 @@ runFrames(60 * 20);
 for (const v of [A.me.x, A.me.y, A.me.z, A.view.yaw, A.view.pitch]) assert.ok(Number.isFinite(v), 'NaN в состоянии клиента');
 assert.ok(A.buf.length <= 40);
 
+assert.equal(globalThis.kitLoaded, true, 'клиент не запросил набор деталей арены');
 console.log(`client.smoke.mjs: все проверки пройдены (снапшотов ${received.snap}, выстрелов ${received.shot}, убийств ${received.kill})`);
 process.exit(0);

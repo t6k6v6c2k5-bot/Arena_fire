@@ -3,11 +3,11 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Многопользовательский 3D-шутер от первого лица для Telegram Mini App",
+  "description": "Arena Fire: браузерный 3D-шутер с аккаунтами, кланами, магазином и лобби",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node test/sim.test.js && node test/game.test.js && node test/client.smoke.mjs && node test/server.wiring.mjs"
+    "test": "node test/sim.test.js && node test/game.test.js && node test/store.test.mjs && node test/world.test.mjs && node test/api.test.mjs && node test/smoke-all.mjs && node test/server.wiring.mjs"
   },
   "engines": {
     "node": ">=18"
@@ -15,6 +15,7 @@
   "dependencies": {
     "express": "^4.19.2",
     "socket.io": "^4.7.5",
-    "three": "^0.170.0"
+    "three": "^0.170.0",
+    "pg": "^8.11.3"
   }
 }

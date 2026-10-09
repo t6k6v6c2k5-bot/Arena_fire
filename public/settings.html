@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0c1216">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Arena Fire">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<title>Настройки — Arena Fire</title>
+<meta name="description" content="Аккаунт и пароль">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=Tektur:wght@500;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/site.css">
+</head>
+<body>
+<main class="wrap"><div class="pagehead"><h1>Настройки</h1></div>
+<div class="grid g2" style="align-items:start">
+  <div class="card"><h3>Управление и графика</h3>
+    <label class="f">Платформа
+      <select id="plat"><option value="auto">Определять автоматически</option><option value="pc">Компьютер: мышь и клавиатура</option><option value="mobile">Телефон: сенсорное управление</option></select></label>
+    <p class="muted small" id="platInfo"></p>
+    <label class="f">Качество графики
+      <select id="quality"><option value="">По умолчанию для платформы</option><option value="low">Эконом: быстрее, мягче картинка</option><option value="mid">Среднее</option><option value="high">Высокое: чётче, нужен мощный телефон или ПК</option></select></label>
+    <label class="f">Чувствительность прицела: <b id="sensV"></b><input type="range" id="sens" min="0.4" max="2.2" step="0.05"></label>
+    <p class="muted small">Настройки хранятся на этом устройстве.</p>
+  </div>
+  <div class="grid" style="align-content:start" id="acc"></div>
+</div></main>
+<script type="module">
+import { boot, api, esc, fmt, toast, tagHtml, lvlHtml, kd, pct, nextUrl, getMe, store, platform, detectPlatform, ICON, $, $$ } from '/site.js';
+import { ACHIEVEMENTS } from '/catalog.js';
+
+const u = await boot('');
+const P = $('#plat');
+const saved = store.get('af_platform');
+P.value = saved === 'pc' || saved === 'mobile' ? saved : 'auto';
+const info = () => { const p = platform(); $('#platInfo').textContent = p === 'pc' ? 'Сейчас: компьютер, управление мышью и клавиатурой. Рядом с ником в бою будет значок 🖥.' : 'Сейчас: телефон, сенсорное управление. Рядом с ником в бою будет значок 📱.'; };
+info();
+P.onchange = () => { if (P.value === 'auto') { try { localStorage.removeItem('af_platform'); } catch { /* ignore */ } } else store.set('af_platform', P.value); info(); toast('Сохранено', 'good'); };
+const Q = $('#quality'); Q.value = store.get('af_quality', '') || '';
+Q.onchange = () => { if (Q.value) store.set('af_quality', Q.value); else { try { localStorage.removeItem('af_quality'); } catch { /* ignore */ } } toast('Сохранено', 'good'); };
+const S = $('#sens'); S.value = store.get('af_sens', '1'); $('#sensV').textContent = Number(S.value).toFixed(2);
+S.oninput = () => { store.set('af_sens', S.value); $('#sensV').textContent = Number(S.value).toFixed(2); };
+if (u) {
+  $('#acc').innerHTML = `<div class="card"><h3>Аккаунт</h3><p class="muted">Позывной: <b>${esc(u.nick)}</b><br>Email: <b>${esc(u.email)}</b></p><button class="btn ghost" id="out">Выйти</button></div>
+  <div class="card"><h3>Смена пароля</h3><form id="f" novalidate><label class="f">Текущий пароль<input type="password" name="old" autocomplete="current-password"></label>
+  <label class="f">Новый пароль, от 8 символов<input type="password" name="new" autocomplete="new-password"></label><div class="err" id="err"></div><button class="btn" type="submit">Сменить пароль</button></form></div>`;
+  $('#out').onclick = async () => { await api('/logout', {}); location.href = '/'; };
+  $('#f').addEventListener('submit', async (e) => {
+    e.preventDefault(); const v = Object.fromEntries(new FormData(e.target)); $('#err').textContent = '';
+    try { await api('/password', v); toast('Пароль изменён', 'good'); e.target.reset(); } catch (x) { $('#err').textContent = x.message; }
+  });
+} else $('#acc').innerHTML = '<div class="card"><h3>Аккаунт</h3><p class="muted">Войдите, чтобы сохранять прогресс.</p><a class="btn" href="/login?next=/settings">Войти</a></div>';
+</script>
+</body>
+</html>

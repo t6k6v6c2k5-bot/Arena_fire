@@ -36,7 +36,7 @@ const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const norm = (a) => { const l = Math.hypot(...a) || 1; return a.map((x) => x / l); };
 
 // камера: yaw вокруг Y, pitch; смотрит на target с расстояния dist (перспектива)
-function panel(root, { yaw = 0, pitch = 0.1, scale = 200, cx, cy, target = [0, 0.9, 0], dist = 6, w = 400, h = 460, label = '', base = null }) {
+function panel(root, { yaw = 0, pitch = 0.1, scale = 200, cx, cy, target = [0, 0.9, 0], dist = 6, w = 400, h = 460, label = '', base = null, bare = false, tint = null }) {
   const faces = collect(root, base);
   const cy_ = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
   const toCam = (p) => {
@@ -58,11 +58,13 @@ function panel(root, { yaw = 0, pitch = 0.1, scale = 200, cx, cy, target = [0, 0
     if (n[2] <= 0.0) continue; // обратная грань
     const depth = fc[2];
     const lit = 0.45 + 0.55 * Math.max(0, dot(n, L));
-    const r = ((f.col >> 16) & 255) * lit, g = ((f.col >> 8) & 255) * lit, b = (f.col & 255) * lit;
+    let r = ((f.col >> 16) & 255) * lit, g = ((f.col >> 8) & 255) * lit, b = (f.col & 255) * lit;
+    if (tint) { const rim = Math.pow(Math.max(0, 1 - n[2]), 2) * 0.55; r += tint[0] * rim; g += tint[1] * rim; b += tint[2] * rim; }
     const pts = q.map((p) => { const k = dist / (dist - p[2]); return [cx + p[0] * scale * k, cy - p[1] * scale * k]; });
     items.push({ depth, pts, fill: `rgb(${r | 0},${g | 0},${b | 0})` });
   }
   items.sort((a, b) => a.depth - b.depth);
+  if (bare) return `<g>${items.map((it) => `<polygon points="${it.pts.map((p) => p.map((x) => x.toFixed(1)).join(',')).join(' ')}" fill="${it.fill}"/>`).join('')}</g>`;
   let s = `<g><rect x="${cx - w / 2}" y="${cy - h / 2}" width="${w}" height="${h}" fill="#cfe0ee" stroke="#456"/><text x="${cx - w / 2 + 8}" y="${cy - h / 2 + 18}" font-size="14" fill="#123">${label}</text>`;
   s += `<clipPath id="c${Math.round(cx)}_${Math.round(cy)}"><rect x="${cx - w / 2}" y="${cy - h / 2}" width="${w}" height="${h}"/></clipPath><g clip-path="url(#c${Math.round(cx)}_${Math.round(cy)})">`;
   for (const it of items) s += `<polygon points="${it.pts.map((p) => p.map((x) => x.toFixed(1)).join(',')).join(' ')}" fill="${it.fill}" stroke="${it.fill}" stroke-width="0.6"/>`;
@@ -80,7 +82,17 @@ if (what === 'players') {
     m.update(0.016, 0, 0, 0);
     views.forEach(([yaw, name], i) => { svg += panel(m.root, { yaw: yaw + Math.PI, pitch: 0.08, cx: 210 + i * 410, cy: 240 + r * 470, scale: 230, label: `команда ${team} · ${name}`, target: [0, 0.95, 0], dist: 7 }); });
   });
-} else if (what === 'close') {
+} else if (what === 'hero') {
+  // Прозрачная картинка солдата для сайта: почти ортографическая камера, подсветка по контуру цветом сайта
+  W = 560; H = 930;
+  const m = M.makePlayerModel(0, 'Герой', { armor: 'arm_std', gun: 'gun_std' });
+  m.setWeapon(0); m.update(0.016, 0, 0.0, 0);
+  const o = { yaw: Math.PI + 0.55, pitch: 0.0, cx: 300, cy: 505, scale: 400, target: [0, 0.98, 0], dist: 40, bare: true, tint: [210, 150, 60] };
+  svg += panel(m.root, o);
+  const k = o.dist / o.dist; // ортографика: y = cy - (y - target.y) * scale
+  console.log('zones', JSON.stringify([0, 0.88, 1.44, 1.8].map((y) => +(((o.cy - (y - o.target[1]) * o.scale * (o.dist / (o.dist - 0))) / H)).toFixed(4))));
+}
+else if (what === 'close') {
   W = 3 * 520 + 10; H = 540;
   const m = M.makePlayerModel(0, 'Анна'); m.setWeapon(0); m.update(0.016, 0, 0.0, 0);
   [[Math.PI, 'лицо'], [Math.PI * 1.25, '3/4'], [Math.PI / 2 + Math.PI, 'профиль']].forEach(([yaw, n], i) => {
@@ -109,5 +121,7 @@ if (what === 'players') {
   const v = M.buildViewmodel(0, 0x2a4f8a); M.animateViewmodel(v, { rl: 0.5 });
   svg += panel(v.group, { yaw: Math.PI / 2 + 0.7, pitch: 0.15, cx: 260 + 2 * 520, cy: 600, scale: 330, w: 510, h: 390, label: 'перезарядка (50%)', target: [0.05, -0.1, -0.3], dist: 4 });
 }
-fs.writeFileSync(out, `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><rect width="${W}" height="${H}" fill="#9ab"/>${svg}</svg>`);
+const VB = what === 'hero' ? '30 150 410 780' : `0 0 ${W} ${H}`; // для героя — кадрируем по фигуре
+const [vw, vh] = VB.split(' ').slice(2);
+fs.writeFileSync(out, `<svg xmlns="http://www.w3.org/2000/svg" width="${vw}" height="${vh}" viewBox="${VB}">${what === 'hero' ? '' : `<rect width="${W}" height="${H}" fill="#9ab"/>`}${svg}</svg>`);
 console.log('ok', out, W, H);

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0c1216">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Arena Fire">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<title>Профиль — Arena Fire</title>
+<meta name="description" content="Статистика игрока">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=Tektur:wght@500;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/site.css">
+</head>
+<body>
+<main class="wrap"><div id="root"><div class="muted">Загрузка…</div></div></main>
+<script type="module">
+import { boot, api, esc, fmt, toast, tagHtml, lvlHtml, kd, pct, nextUrl, getMe, $, $$ } from '/site.js';
+import { ACHIEVEMENTS } from '/catalog.js';
+
+const me = await boot('/profile');
+const m = /^\/profile\/(.+)$/.exec(location.pathname);
+const nick = m ? decodeURIComponent(m[1]) : me && me.nick;
+if (!nick) { location.replace('/login?next=/profile'); await new Promise(() => {}); }
+try {
+  const d = await api('/profile/' + encodeURIComponent(nick));
+  const u = d.user, mine = me && me.id === u.id;
+  document.title = u.nick + ' — Arena Fire';
+  const hours = u.secs >= 3600 ? Math.floor(u.secs / 3600) + ' ч ' + Math.floor((u.secs % 3600) / 60) + ' мин' : Math.floor(u.secs / 60) + ' мин';
+  $('#root').innerHTML = `
+  <div class="pagehead"><div><h1>${tagHtml(u.clan && u.clan.tag)}${esc(u.nick)}</h1>
+    <div class="muted">${esc(u.rank)} · с нами с ${new Date(u.created_at).toLocaleDateString('ru-RU')}${u.clan ? ` · клан <a href="/clan/${u.clan.id}">${esc(u.clan.name)}</a>` : ''}</div></div>
+    ${mine ? '<div><a class="btn ghost sm" href="/shop">Магазин</a> <a class="btn ghost sm" href="/settings">Настройки</a></div>' : ''}</div>
+  <div class="card" style="margin-bottom:16px">${lvlHtml(u)}</div>
+  <div class="grid g4" style="margin-bottom:16px">
+    <div class="card stat"><b>${fmt(u.kills)}</b><span>убийств</span></div>
+    <div class="card stat"><b>${fmt(u.deaths)}</b><span>смертей</span></div>
+    <div class="card stat"><b>${kd(u.kills, u.deaths)}</b><span>K/D</span></div>
+    <div class="card stat"><b>${pct(u.headshots, u.kills)}</b><span>хедшотов</span></div>
+    <div class="card stat"><b>${fmt(u.matches)}</b><span>матчей</span></div>
+    <div class="card stat"><b>${fmt(u.wins)}</b><span>побед (${pct(u.wins, u.matches)})</span></div>
+    <div class="card stat"><b>${fmt(u.best_kills)}</b><span>рекорд убийств за матч</span></div>
+    <div class="card stat"><b>${hours}</b><span>в бою</span></div>
+  </div>
+  <div class="card" style="margin-bottom:16px"><h3>Достижения <span class="muted small">${ACHIEVEMENTS.filter((a) => a.test(u)).length} из ${ACHIEVEMENTS.length}</span></h3><div class="ach">${ACHIEVEMENTS.map((a) => `<div class="${a.test(u) ? '' : 'off'}"><i>${a.icon}</i><span><b>${a.name}</b><small>${a.desc}</small></span></div>`).join('')}</div></div>
+  <div class="card"><h3>Последние матчи</h3><div class="tscroll"><table class="tbl"><thead><tr><th>Итог</th><th class="r">Убийства</th><th class="r">Смерти</th><th class="r">Хедшоты</th><th class="r">Опыт</th><th class="r">Монеты</th><th class="r">Когда</th></tr></thead>
+  <tbody>${d.history.length ? d.history.map((h) => `<tr><td class="${h.win ? 'win' : 'lose'}">${h.win ? 'Победа' : 'Поражение'}</td><td class="r">${h.kills}</td><td class="r">${h.deaths}</td><td class="r">${h.hs}</td><td class="r">+${h.xp}</td><td class="r coin">+${h.coins}</td><td class="r muted">${new Date(h.at).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</td></tr>`).join('') : '<tr><td colspan="7" class="muted">Матчей пока нет</td></tr>'}</tbody></table></div></div>`;
+} catch (e) { $('#root').innerHTML = `<div class="card center"><h2>Игрок не найден</h2><p class="muted">${esc(e.message)}</p><a class="btn" href="/leaders">К рейтингу</a></div>`; }
+</script>
+</body>
+</html>

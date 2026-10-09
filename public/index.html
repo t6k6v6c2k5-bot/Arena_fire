@@ -2,114 +2,104 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<meta name="theme-color" content="#0b1118">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0c1216">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Arena Fire">
-<link rel="manifest" href="manifest.webmanifest">
-<link rel="apple-touch-icon" href="icon-180.png">
-<link rel="icon" type="image/png" href="icon-192.png">
-<title>Arena Fire</title>
-<link rel="stylesheet" href="style.css">
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
-<script src="/socket.io/socket.io.js"></script>
-<script type="importmap">{"imports":{"three":"/vendor/three/three.module.js"}}</script>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<title>Arena Fire — шутер 4×4, который открывается по ссылке</title>
+<meta name="description" content="Командный шутер 4 на 4 прямо в браузере. Играйте с друзьями с телефона или компьютера, без установки.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=Tektur:wght@500;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/site.css">
 </head>
 <body>
-<canvas id="c"></canvas>
-
-<!-- Зоны для тач-управления -->
-<div id="zoneL" class="zone"></div>
-<div id="zoneR" class="zone"></div>
-
-<div id="hud" class="hidden">
-  <div id="top">
-    <div class="score t0"><span id="s0">0</span></div>
-    <div id="timer">5:00</div>
-    <div class="score t1"><span id="s1">0</span></div>
+<main style="padding-top:0">
+<section class="wrap hero">
+  <div>
+    <h1>Зашёл на пять минут. Вышел через час.</h1>
+    <p class="lead">Arena Fire — командный шутер прямо в браузере. Откройте ссылку, выберите режим и вы уже на арене: с друзьями, с ботами или с незнакомцами, которые скоро станут соперниками.</p>
+    <div class="cta" id="cta">
+      <a class="btn big" href="/register">Создать аккаунт</a>
+      <a class="btn big ghost" href="/play?mode=quick&skill=0">Сначала просто попробую</a>
+    </div>
+    <div class="live"><span><span class="dot"></span> сейчас в игре <b id="sOnline">–</b></span><span>бойцов зарегистрировано <b id="sUsers">–</b></span><span>матчей сыграно <b id="sMatches">–</b></span></div>
   </div>
-  <div id="stats"><span id="fps">--</span> fps · <span id="ping">--</span> мс</div>
-  <div id="killfeed"></div>
-
-  <div id="crosshair">
-    <i class="l"></i><i class="r"></i><i class="u"></i><i class="d"></i>
-    <b id="hitm"></b>
+  <div class="range" aria-hidden="true">
+    <img src="/img/soldier.svg" alt="" width="410" height="780" fetchpriority="high">
+    <div class="np"><i>WLF</i>Viking<span>🖥</span></div>
+    <div class="kf"><b class="a">Viking</b> <em>▸</em> <b class="b">Hawk</b> <span>📱</span></div>
   </div>
+</section>
 
-  <div id="scope" class="hidden"><i class="h"></i><i class="v"></i><i class="dot"></i></div>
-  <div id="dmgnums"></div>
-  <div id="streak"></div>
-  <div id="dmgvig"></div>
-  <div id="dmgdir"><i></i></div>
-  <div id="prot" class="hidden">ЗАЩИТА</div>
-  <div id="msg"></div>
+<section class="sect"><div class="wrap">
+  <h2>Выберите, как сегодня играть</h2>
+  <p class="sub">Четыре режима, и в каждом можно позвать друзей в свою комнату по короткому коду.</p>
+  <div class="modes" id="modes"></div>
+</div></section>
 
-  <div id="bl">
-    <div id="hpnum">100</div>
-    <div id="hpbar"><div id="hpfill"></div></div>
+<section class="sect"><div class="wrap">
+  <h2>С телефона и с компьютера — в одном бою</h2>
+  <p class="sub">Комнаты общие. Друг сидит за компьютером, вы едете в метро — вы всё равно в одной команде. Рядом с ником видно, кто с чего играет: 🖥 или 📱.</p>
+  <div class="dev">
+    <div><h3>🖥 Компьютер</h3><p>Мышь и клавиатура, как в любом хорошем шутере. Полный экран и чёткая картинка.</p></div>
+    <div><h3>📱 Телефон</h3><p>Управление под большие пальцы и экономная графика, чтобы всё шло плавно даже в дороге.</p></div>
   </div>
-  <div id="wbar">
-    <button class="wb" id="wb0"><b>1</b>АК</button>
-    <button class="wb" id="wb1"><b>2</b>ПМ</button>
-    <button class="wb" id="wb2"><b>3</b>ДР</button>
-    <button class="wb" id="wb3"><b>4</b>ПП</button>
-    <button class="wb" id="wb4"><b>5</b>СН</button>
+</div></section>
+
+<section class="sect"><div class="wrap grid g2" style="gap:36px">
+  <div>
+    <h2>Каждый бой чему-то учит</h2>
+    <p class="sub" style="margin-bottom:14px">За матчи вы получаете опыт и монеты. Тратьте их на расцветки оружия, броню и цвет трассеров, чтобы вас узнавали в бою. Внешний вид — только для красоты, шансы у всех равные.</p>
+    <div class="grid" style="gap:10px">
+      <div class="card feat" style="padding:16px"><h3>Звания</h3><p>Начните новобранцем и дорастите до генерала. По пути — 14 достижений.</p></div>
+      <div class="card feat" style="padding:16px"><h3>Кланы</h3><p>Соберите своих. Тег клана светится у вашего ника в каждом бою.</p></div>
+    </div>
   </div>
-  <div id="br">
-    <div id="wname">Автомат</div>
-    <div id="ammo">30 <small>/ 120</small></div>
-    <div id="reload" class="hidden">ПЕРЕЗАРЯДКА</div>
+  <div class="card"><h3>Сейчас впереди</h3><div class="tscroll"><table class="tbl"><tbody id="top5"><tr><td class="muted">Загрузка…</td></tr></tbody></table></div>
+    <a class="btn ghost sm" style="margin-top:14px" href="/leaders">Весь рейтинг</a></div>
+</div></section>
+
+<section class="sect"><div class="wrap">
+  <h2>Как зайти</h2>
+  <div class="log">
+    <div><time>Раз</time><span><b>Откройте ссылку</b>Ничего скачивать не нужно. Хватит браузера на телефоне или компьютере.</span></div>
+    <div><time>Два</time><span><b>Придумайте позывной</b>Или зайдите гостем и посмотрите, как всё устроено. Прогресс сохраняется только в аккаунте.</span></div>
+    <div><time>Три</time><span><b>Нажмите «В бой»</b>Мы найдём комнату, а если людей мало — добавим ботов, чтобы скучно не было.</span></div>
   </div>
-</div>
+</div></section>
 
-<!-- Тач-кнопки -->
-<div id="touch" class="hidden">
-  <div id="joyBase"><div id="joyKnob"></div></div>
-  <button id="bFire" class="btn big">🔫</button>
-  <button id="bJump" class="btn">⤒</button>
-  <button id="bReload" class="btn">⟳</button>
-  <button id="bAds" class="btn">◎</button>
-  <button id="bScore" class="btn sm">≡</button>
-  <button id="bMenu" class="btn sm">II</button>
-  <button id="bFull" class="btn sm">⛶</button>
-  <button id="bAuto" class="btn sm">А</button>
-</div>
-
-<div id="scoreboard" class="hidden"></div>
-
-<div id="rotate" class="overlay"><div>↻<br>Поверните телефон горизонтально</div></div>
-
-<div id="menu" class="overlay">
-  <div class="card">
-    <h1>ARENA <span>FIRE</span></h1>
-    <p class="sub">Командный шутер 4 на 4 · бои с ботами и онлайн</p>
-    <input id="nameInput" maxlength="16" placeholder="Ваш позывной" autocomplete="off">
-    <label class="slider">Чувствительность <input id="sens" type="range" min="0.4" max="2.2" step="0.05" value="1"></label>
-    <label class="slider">Боты
-      <select id="skill">
-        <option value="0">Лёгкие</option>
-        <option value="1">Средние</option>
-        <option value="2">Сложные</option>
-      </select>
-    </label>
-    <label class="slider">Авто-огонь по цели <input id="autoFire" type="checkbox"></label>
-    <button id="playBtn" class="primary">В БОЙ</button>
-    <button id="fsBtn" class="secondary">⛶ Полный экран</button>
-    <div id="iosHint" class="hint hidden">iPhone: чтобы убрать панели браузера, нажмите «Поделиться» → «На экран “Домой”» и запускайте игру с иконки.</div>
-    <div id="status"></div>
-    <ul class="help">
-      <li class="pc">WASD — движение · мышь — прицел · ЛКМ — огонь</li>
-      <li class="pc">ПКМ — прицел · R — перезарядка · 1–5 / колесо — оружие · Пробел — прыжок · Tab — счёт</li>
-      <li class="touch">Левый стик — движение · правая часть — обзор · 🔫 — огонь · ◎ — прицел · панель внизу — оружие</li>
-      <li>Победа — первая команда до 40 убийств или больше убийств за 5 минут</li>
-    </ul>
+<section class="sect"><div class="wrap">
+  <h2>Что нового</h2>
+  <div class="log">
+    <div><time>Октябрь 2026</time><span><b>Режимы, общие комнаты и новый вид сайта</b>Четыре режима, достижения, настройка графики, а ещё теперь игроки с телефонов и компьютеров играют вместе.</span></div>
+    <div><time>Октябрь 2026</time><span><b>Аккаунты, кланы и магазин</b>Профиль со статистикой, рейтинг, кланы, расцветки и ежедневный бонус за возвращение.</span></div>
+    <div><time>Октябрь 2026</time><span><b>Новые бойцы и оружие</b>Мы перерисовали солдат и стволы, добавили руки и анимации.</span></div>
   </div>
-</div>
+</div></section>
+</main>
 
-<div id="endscreen" class="overlay hidden"><div class="card"><h2 id="endTitle"></h2><p id="endSub"></p></div></div>
+<script type="module">
+import { boot, api, esc, fmt, toast, tagHtml, lvlHtml, kd, pct, nextUrl, getMe, store, platform, detectPlatform, ICON, MODE_ICON, $, $$ } from '/site.js';
 
-<script type="module" src="client.js"></script>
+const u = await boot('/');
+if (u) $('#cta').innerHTML = '<a class="btn big" href="/lobby">В лобби</a><a class="btn big ghost" href="/profile">Мой профиль</a>';
+const MODES = [
+  ['tdm', 'Командный бой', 'Четверо на четверо. Держитесь вместе, прикрывайте друг друга и берите арену.', '5 минут'],
+  ['hs', 'Только хедшоты', 'Целься выше. Здесь считается только голова, так что каждый выстрел на счету.', '5 минут'],
+  ['ffa', 'Каждый за себя', 'Никаких союзников и никакой пощады. Остаётся один.', '5 минут'],
+  ['gg', 'Гонка вооружений', 'С каждым убийством оружие меняется. Кто первым пройдёт весь список, тот и победил.', '7 минут'],
+];
+$('#modes').innerHTML = MODES.map(([id, n, d, m]) => `<a class="mode" href="${u ? '/lobby?gm=' + id : '/play?mode=quick&skill=0&gm=' + id}"><div class="ic">${MODE_ICON[id]}</div><div><h3>${n}</h3><p>${d}</p></div><div class="meta">${m}</div></a>`).join('');
+api('/stats').then((s) => { $('#sOnline').textContent = fmt(s.online); $('#sUsers').textContent = fmt(s.users); $('#sMatches').textContent = fmt(s.matches); $('#sKills').textContent = fmt(s.kills); }).catch(() => {});
+api('/leaderboard?by=xp').then((d) => {
+  const rows = d.rows.slice(0, 5);
+  $('#top5').innerHTML = rows.length ? rows.map((r, i) => `<tr><td>${i + 1}</td><td>${tagHtml(r.clan_tag)}<a href="/profile/${encodeURIComponent(r.nick)}">${esc(r.nick)}</a></td><td class="r muted">ур. ${r.level}</td></tr>`).join('') : '<tr><td class="muted">Рейтинг пока пуст. Сыграйте матч и станьте первым.</td></tr>';
+}).catch(() => {});
+</script>
 </body>
 </html>

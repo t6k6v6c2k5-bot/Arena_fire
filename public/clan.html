@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0c1216">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Arena Fire">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<title>Клан — Arena Fire</title>
+<meta name="description" content="Состав и статистика клана">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=Tektur:wght@500;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/site.css">
+</head>
+<body>
+<main class="wrap"><div id="root"><div class="muted">Загрузка…</div></div></main>
+<script type="module">
+import { boot, api, esc, fmt, toast, tagHtml, lvlHtml, kd, pct, nextUrl, getMe, $, $$ } from '/site.js';
+
+const me = await boot('/clans');
+const id = /^\/clan\/(\d+)/.exec(location.pathname)?.[1];
+async function load() {
+  try {
+    const d = await api('/clans/' + id);
+    const c = d.clan;
+    document.title = c.name + ' — Arena Fire';
+    const canJoin = me && !me.clan && c.members < d.max;
+    $('#root').innerHTML = `<div class="pagehead"><div><h1><span class="tag" style="font-size:.5em">${esc(c.tag)}</span> ${esc(c.name)}</h1><div class="muted">${esc(c.descr) || 'Без описания'}</div></div>
+      <div>${canJoin ? '<button class="btn" id="join">Вступить</button>' : ''}${d.mine ? '<button class="btn danger sm" id="leave">Покинуть клан</button>' : ''}</div></div>
+      <div class="grid g4" style="margin-bottom:16px"><div class="card stat"><b>${c.members}/${d.max}</b><span>участников</span></div><div class="card stat"><b>${fmt(c.kills)}</b><span>убийств</span></div><div class="card stat"><b>${fmt(c.wins)}</b><span>побед</span></div><div class="card stat"><b>${fmt(c.xp)}</b><span>общий опыт</span></div></div>
+      <div class="card"><h3>Состав</h3><div class="tscroll"><table class="tbl"><thead><tr><th>Игрок</th><th class="r">Ур.</th><th class="r">Убийств</th><th class="r">K/D</th><th></th></tr></thead><tbody>${d.members.map((m) => `<tr><td><a href="/profile/${encodeURIComponent(m.nick)}">${esc(m.nick)}</a> ${m.owner ? '👑' : ''}</td><td class="r">${m.level}</td><td class="r">${fmt(m.kills)}</td><td class="r">${kd(m.kills, m.deaths)}</td><td class="r">${d.owner && !m.owner ? `<button class="btn sm danger" data-kick="${m.id}">Выгнать</button>` : ''}</td></tr>`).join('')}</tbody></table></div></div>`;
+  } catch (e) { $('#root').innerHTML = `<div class="card center"><h2>Клан не найден</h2><a class="btn" href="/clans">Все кланы</a></div>`; }
+}
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  try {
+    if (b.id === 'join') { if (!me) return (location.href = '/login?next=' + location.pathname); await api(`/clans/${id}/join`, {}); toast('Вы в клане!', 'good'); location.reload(); }
+    else if (b.id === 'leave') { if (!confirm('Покинуть клан?')) return; await api('/clans/leave', {}); location.href = '/clans'; }
+    else if (b.dataset.kick) { if (!confirm('Выгнать игрока?')) return; await api('/clans/kick', { id: Number(b.dataset.kick) }); load(); }
+  } catch (x) { toast(x.message, 'bad'); }
+});
+load();
+</script>
+</body>
+</html>

@@ -59,19 +59,34 @@ class Player {
     this.protectUntil = 0;
     this.ai = bot ? newAI() : null;
     this.assist = 0; // 0..1: помощь прицеливания (для тач-игроков 1)
+    this.uid = null;        // id аккаунта (null — гость или бот)
+    this.equip = null;      // экипировка из магазина {gun, armor, tracer}
+    this.tag = '';          // тег клана
+    this.level = 0;
+    this.hs = 0;            // хедшоты за матч
+    this.joinT = 0;         // время комнаты, когда игрок вошёл в матч
+    this.reported = false;  // результат матча уже записан
+    this.gg = 0;            // этап «гонки вооружений»
   }
 }
 
 class Room {
-  constructor(id, skill = 0) {
+  constructor(id, skill = 0, opts = {}) {
     this.id = id;
+    this.name = String(opts.name || '').slice(0, 24);
+    this.code = opts.code || '';          // код комнаты для входа друзей
+    this.priv = !!opts.priv;              // приватная: не видна в списке
+    this.custom = !!opts.custom;          // создана игроком: в быстрый поиск не попадает
+    this.onResult = null;                 // (player, итог) — запись результата в профиль
     this.skillIdx = clamp(Math.floor(num(skill, 0)), 0, BOT_SKILL.length - 1);
     this.skill = BOT_SKILL[this.skillIdx];
+    this.mode = S.MODES[opts.mode] || S.MODES.tdm;
+    this.winId = 0;
     this.players = new Map();
     this.t = 0;
     this.state = 0; // 0 — бой, 1 — итоги
     this.scores = [0, 0];
-    this.endT = S.MATCH.time;
+    this.endT = this.mode.time;
     this.overT = 0;
     this.winner = -1;
     this.rosterDirty = true;
@@ -96,8 +111,10 @@ class Room {
     this.rosterDirty = true;
   }
 
-  addHuman(sock, name) {
+  addHuman(sock, name, extra = {}) {
     const p = new Player(name, this.smallerTeam(), false, sock);
+    p.uid = extra.uid || null; p.equip = extra.equip || null; p.tag = extra.tag || ''; p.level = extra.level || 0;
+    p.joinT = this.t;
     this.players.set(p.id, p);
     this.spawn(p);
     this.trimBots();
@@ -105,7 +122,24 @@ class Room {
     return p;
   }
 
+  // Дружественный ли игрок b для a (в командных режимах — та же команда, иначе врагов нет «своих»).
+  friend(a, b) { return this.mode.team && a.team === b.team; }
+
+  result(p, loss = false) {
+    const win = !loss && (this.mode.team ? this.winner === p.team : this.winId === p.id);
+    const draw = !loss && (this.mode.team ? this.winner === -1 : this.winId === 0);
+    return { kills: p.kills, deaths: p.deaths, hs: p.hs, win, draw, secs: Math.max(0, Math.round(this.t - p.joinT)), skill: this.skillIdx, mode: this.mode.id };
+  }
+
+  report(p, loss = false) {
+    if (p.reported || p.bot || !p.uid || !this.onResult) return;
+    p.reported = true;
+    try { this.onResult(p, this.result(p, loss)); } catch (e) { console.error('onResult', e); }
+  }
+
   removePlayer(id) {
+    const p = this.players.get(id);
+    if (p && this.state === 0 && (p.kills || p.deaths)) this.report(p, true); // ливнул до конца матча — поражение
     if (!this.players.delete(id)) return;
     this.rosterDirty = true;
     this.fillBots();
@@ -128,7 +162,7 @@ class Room {
 
   pickSpawn(team) {
     const pts = S.SPAWNS[team];
-    const enemies = [...this.players.values()].filter((o) => o.alive && o.team !== team);
+    const enemies = [...this.players.values()].filter((o) => o.alive && (o.team !== team || !this.mode.team));
     let best = pts[0], bestScore = -1;
     for (const pt of pts) {
       let md = 1e9;
@@ -146,7 +180,7 @@ class Room {
     p.onGround = true;
     p.hp = p.bot ? this.skill.hp : 100;
     p.alive = true;
-    p.weapon = 0;
+    p.weapon = this.mode.gun ? S.GG_ORDER[p.gg] : 0;
     p.wp = S.WEAPONS.map((w) => ({ mag: w.mag, res: p.bot ? 9999 : w.reserve }));
     p.reloading = false;
     p.nextFire = this.t + 0.4;
@@ -205,7 +239,7 @@ class Room {
 
     const targets = [];
     for (const o of this.players.values()) {
-      if (o === p || !o.alive || o.team === p.team || this.t < o.protectUntil) continue;
+      if (o === p || !o.alive || this.friend(o, p) || this.t < o.protectUntil) continue;
       const pos = this.posAt(o, rt);
       targets.push({ p: o, x: pos.x, y: pos.y, z: pos.z });
     }
@@ -253,7 +287,8 @@ class Room {
         const rec = dmgTo.get(hitT.p) || { dmg: 0, head: false, dist: 0, zone: -1 };
         const fall = w.fall ? Math.max(w.fall[2], 1 - Math.max(0, dist - w.fall[0]) / w.fall[1]) : 1;
         const zm = head ? w.head : zone === 0 ? S.ZONE_LEG_MULT : 1;
-        rec.dmg += w.dmg * zm * fall;
+        // «Только хедшоты»: голова убивает сразу, тело почти не страдает
+        rec.dmg += this.mode.id === 'hs' ? (head ? 999 : w.dmg * zm * fall * 0.25) : w.dmg * zm * fall;
         rec.dist = Math.max(rec.dist, dist);
         rec.head = rec.head || head;
         if (zone > rec.zone) rec.zone = zone; // в событие идёт самая тяжёлая зона
@@ -288,33 +323,58 @@ class Room {
     vic.queue = [];
     vic.respawnAt = this.t + S.MATCH.respawn;
     att.kills++;
-    this.scores[att.team]++;
+    if (head) att.hs++;
     this.emit('kill', { k: att.id, v: vic.id, w: att.weapon, hs: head ? 1 : 0, d: Math.round(dist), z: zone });
-    if (this.scores[att.team] >= S.MATCH.killLimit) this.endMatch();
+    if (this.mode.team) {
+      this.scores[att.team]++;
+      if (this.scores[att.team] >= this.mode.killLimit) this.endMatch();
+    } else if (this.mode.gun) {
+      att.gg++;
+      if (att.gg >= S.GG_ORDER.length) { this.winId = att.id; this.endMatch(); return; }
+      att.weapon = S.GG_ORDER[att.gg];                    // следующее оружие, свежие патроны
+      att.wp[att.weapon] = { mag: S.WEAPONS[att.weapon].mag, res: att.bot ? 9999 : S.WEAPONS[att.weapon].reserve };
+      att.reloading = false; att.bloom = 0; att.ads = false;
+      att.nextFire = Math.max(att.nextFire, this.t + 0.4);
+      if (att.sock) att.sock.emit('ggup', { gg: att.gg, w: att.weapon });
+    } else if (att.kills >= this.mode.killLimit) { this.winId = att.id; this.endMatch(); }
   }
 
   endMatch() {
     if (this.state !== 0) return;
     this.state = 1;
     this.overT = S.MATCH.over;
-    this.winner = this.scores[0] > this.scores[1] ? 0 : this.scores[1] > this.scores[0] ? 1 : -1;
-    this.emit('over', { winner: this.winner, scores: this.scores });
+    if (this.mode.team) this.winner = this.scores[0] > this.scores[1] ? 0 : this.scores[1] > this.scores[0] ? 1 : -1;
+    else {
+      this.winner = -1;
+      if (!this.winId) { // время вышло: лидер по этапу/убийствам, при равенстве — ничья
+        const key = (p) => (this.mode.gun ? p.gg * 1000 : 0) + p.kills;
+        const sorted = [...this.players.values()].sort((a, b) => key(b) - key(a));
+        if (sorted.length && key(sorted[0]) > 0 && (sorted.length < 2 || key(sorted[0]) > key(sorted[1]))) this.winId = sorted[0].id;
+      }
+    }
+    for (const p of this.players.values()) this.report(p);
+    this.emit('over', { winner: this.winner, winId: this.winId, scores: this.scores });
   }
 
   resetMatch() {
     this.state = 0;
     this.scores = [0, 0];
-    this.endT = S.MATCH.time;
+    this.endT = this.mode.time;
     this.winner = -1;
-    for (const p of this.players.values()) { p.kills = 0; p.deaths = 0; this.spawn(p); }
+    this.winId = 0;
+    for (const p of this.players.values()) { p.kills = 0; p.deaths = 0; p.hs = 0; p.gg = 0; p.reported = false; p.joinT = this.t; this.spawn(p); }
     this.emit('start', {});
   }
 
   // ----- Сеть: разбор пакетов клиента -----
+  rosterEntry(o) {
+    return { id: o.id, name: o.name, team: o.team, bot: o.bot ? 1 : 0, tag: o.tag, lv: o.level, eq: o.equip, pl: o.plat || '' };
+  }
+
   welcome(p) {
     return {
-      id: p.id, team: p.team, room: this.id, tick: S.TICK, skill: this.skillIdx, skillName: this.skill.name,
-      players: [...this.players.values()].map((o) => ({ id: o.id, name: o.name, team: o.team, bot: o.bot ? 1 : 0 })),
+      id: p.id, team: p.team, room: this.id, roomName: this.name, code: this.code, tick: S.TICK, mode: this.mode.id, modeName: this.mode.name, teams: this.mode.team ? 1 : 0, lim: this.mode.killLimit, ggN: S.GG_ORDER.length, skill: this.skillIdx, skillName: this.skill.name,
+      players: [...this.players.values()].map((o) => (this.rosterEntry(o))),
     };
   }
 
@@ -345,7 +405,7 @@ class Room {
     S.stepPlayer(p, inp);
 
     const wi = inp.weapon;
-    if (Number.isInteger(wi) && wi >= 0 && wi < S.WEAPONS.length && wi !== p.weapon) {
+    if (!this.mode.gun && Number.isInteger(wi) && wi >= 0 && wi < S.WEAPONS.length && wi !== p.weapon) {
       p.weapon = wi;
       p.reloading = false;
       p.nextFire = Math.max(p.nextFire, this.t + 0.35);
@@ -410,7 +470,7 @@ class Room {
       ai.nextScan = t + 0.15 + Math.random() * 0.1;
       let best = null, bd = 1e9;
       for (const o of this.players.values()) {
-        if (!o.alive || o.team === b.team) continue;
+        if (!o.alive || this.friend(o, b)) continue;
         const d = Math.hypot(o.x - b.x, o.z - b.z);
         if (d < bd && d < sk.range && this.los(b, o)) { best = o; bd = d; }
       }
@@ -430,7 +490,7 @@ class Room {
 
     if (ai.target && (ai.visible || t - ai.lastSeen < 0.8)) {
       const tg = ai.target;
-      const dx = tg.x - b.x, dz = tg.z - b.z, dy = tg.y + 1.2 - (b.y + S.PLAYER.eye);
+      const dx = tg.x - b.x, dz = tg.z - b.z, dy = tg.y + (this.mode.id === 'hs' ? 1.62 : 1.2) - (b.y + S.PLAYER.eye);
       const d = Math.hypot(dx, dz);
       if (t >= ai.errT) {
         ai.errT = t + 0.35;
@@ -522,7 +582,7 @@ class Room {
 
     if (this.rosterDirty) {
       this.rosterDirty = false;
-      this.emit('roster', { players: [...this.players.values()].map((p) => ({ id: p.id, name: p.name, team: p.team, bot: p.bot ? 1 : 0 })) });
+      this.emit('roster', { players: [...this.players.values()].map((p) => (this.rosterEntry(p))) });
     }
 
     this.sendSnapshots(now);
@@ -531,11 +591,11 @@ class Room {
   sendSnapshots(now) {
     const list = [];
     for (const p of this.players.values()) {
-      list.push([p.id, r2(p.x), r2(p.y), r2(p.z), r2(p.yaw), r2(p.pitch), p.alive ? 1 : 0, p.weapon, p.kills, p.deaths]);
+      list.push([p.id, r2(p.x), r2(p.y), r2(p.z), r2(p.yaw), r2(p.pitch), p.alive ? 1 : 0, p.weapon, p.kills, p.deaths, p.gg]);
     }
     const base = {
       t: now, st: this.state, rem: Math.max(0, Math.ceil(this.state === 0 ? this.endT : this.overT)),
-      sc: this.scores, win: this.winner, p: list,
+      sc: this.scores, win: this.winner, wid: this.winId, p: list,
     };
     for (const p of this.players.values()) {
       if (!p.sock) continue;
@@ -549,7 +609,7 @@ class Room {
           rl: p.reloading ? Math.max(0, r2(p.reloadEnd - this.t)) : 0,
           resp: p.alive ? 0 : Math.max(0, Math.ceil(p.respawnAt - this.t)),
           prot: this.t < p.protectUntil ? 1 : 0,
-          bl: r3(p.bloom), ads: p.ads ? 1 : 0,
+          bl: r3(p.bloom), ads: p.ads ? 1 : 0, gg: p.gg,
         },
       });
     }

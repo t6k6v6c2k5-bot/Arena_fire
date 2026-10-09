@@ -2,16 +2,27 @@
 import * as THREE from 'three';
 import * as S from './shared.js';
 import { makePlayerModel, buildViewmodel, animateViewmodel } from './models.js';
+import { buildWorldMesh } from './world.js';
 import { createFx } from './fx.js';
 import { createAudio } from './audio.js';
+import { ITEM_BY_ID } from './catalog.js';
 
 const $ = (id) => document.getElementById(id);
 const clamp = S.clamp;
-const tg = window.Telegram?.WebApp;
-const isTouch = matchMedia('(pointer: coarse)').matches || ['android', 'ios'].includes(tg?.platform);
+// Платформа: телефон (тач, авто-огонь и помощь прицела) или ПК (мышь и клавиатура, без помощников). Можно переопределить в настройках.
+const lsGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+const platform = ['pc', 'mobile'].includes(lsGet('af_platform')) ? lsGet('af_platform') : (matchMedia('(pointer: coarse)').matches ? 'mobile' : 'pc');
+const isTouch = platform === 'mobile';
 document.body.classList.toggle('touch-ui', isTouch);
 
-try { tg?.ready(); tg?.expand(); tg?.disableVerticalSwipes?.(); } catch { /* вне Telegram */ }
+// Параметры запуска из лобби: ?mode=quick|create|room|code&skill=&room=&code=&rn=&priv=
+const Q = new URLSearchParams(typeof location !== 'undefined' ? location.search : '');
+let accountDone = false;
+let account = null; // профиль вошедшего игрока (null — гость)
+const accountReady = (typeof fetch === 'function' ? fetch('/api/me', { credentials: 'same-origin' }).then((r) => r.json()).then((d) => { account = d && d.user ? d.user : null; }) : Promise.resolve()).catch(() => {}).then(() => { accountDone = true; });
+const MODE_GOAL = { tdm: 'Первые до 40 убийств', hs: 'Голова убивает сразу', ffa: 'До 20 убийств', gg: 'Пройдите все 5 оружий' };
+const PLAT_MARK = { m: ' 📱', p: ' 🖥' };
+const dispName = (pi) => (pi ? (pi.tag ? `[${pi.tag}] ${pi.name}` : pi.name) + (PLAT_MARK[pi.pl] || '') : '?');
 
 const INTERP = 100; // мс задержки интерполяции чужих игроков
 
@@ -21,6 +32,9 @@ let joined = false;
 let wantJoin = false;
 let myId = 0;
 let myTeam = 0;
+let modeName = 'Командный бой';
+let modeId = 'tdm', teamsMode = true, modeLim = 40, ggN = 5, gunMode = false;
+const isEnemy = (team) => !teamsMode || team !== myTeam; // в режимах «каждый сам за себя» врагов нет своих
 const roster = new Map();
 
 const view = { yaw: 0, pitch: 0 };
@@ -52,8 +66,10 @@ const serverNow = () => Date.now() + clockOff;
 
 // ---------- Рендер ----------
 const canvas = $('c');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: !isTouch, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, isTouch ? 1.5 : 2));
+const QUALITY = { low: 1, mid: 1.5, high: 2 };
+const quality = QUALITY[lsGet('af_quality')] ? lsGet('af_quality') : (isTouch ? 'mid' : 'high');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: quality !== 'low', powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, QUALITY[quality]));
 renderer.autoClear = false;
 
 const HORIZON = 0xdcecf8;
@@ -94,15 +110,33 @@ const mats = {};
 const boxMat = (c) => (mats[c] ??= new THREE.MeshLambertMaterial({ color: COLORS[c] ?? 0x888888, flatShading: true }));
 const edgeMat = new THREE.LineBasicMaterial({ color: 0x1b2430, transparent: true, opacity: 0.45 });
 
+// Запасной вид арены (простые коробки) показывается, пока грузится набор деталей Kenney; если набор не загрузился, так и остаётся.
+const plainWorld = new THREE.Group();
+async function loadKitWorld() {
+  if (typeof fetch !== 'function') return;
+  const kit = await (await fetch('/world/kit.json')).json();
+  const w = buildWorldMesh(kit, S.BOXES, S.MAP);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(w.positions, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(w.normals, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(w.colors, 3));
+  g.setIndex(w.indices);
+  const mesh = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ vertexColors: true }));
+  mesh.frustumCulled = false;
+  scene.remove(plainWorld);
+  scene.add(mesh);
+}
+
 function buildWorld() {
+  scene.add(plainWorld);
   for (const b of S.BOXES) {
     const g = new THREE.BoxGeometry(b.w, b.h, b.d);
     const m = new THREE.Mesh(g, boxMat(b.c));
     m.position.set(b.x, b.y + b.h / 2, b.z);
-    scene.add(m);
+    plainWorld.add(m);
     const e = new THREE.LineSegments(new THREE.EdgesGeometry(g), edgeMat);
     e.position.copy(m.position);
-    scene.add(e);
+    plainWorld.add(e);
   }
 
   // пол с шахматной текстурой
@@ -119,7 +153,7 @@ function buildWorld() {
   tex.magFilter = THREE.NearestFilter;
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(64, 44), new THREE.MeshLambertMaterial({ map: tex }));
   floor.rotation.x = -Math.PI / 2;
-  scene.add(floor);
+  plainWorld.add(floor);
 
   // зоны баз
   for (const [team, x] of [[0, -28.5], [1, 28.5]]) {
@@ -158,6 +192,7 @@ function buildWorld() {
   }
 }
 buildWorld();
+loadKitWorld().catch((e) => console.warn('набор деталей арены не загрузился, остаётся простой вид', e));
 
 // ---------- Модели игроков ----------
 const remotes = new Map();
@@ -181,7 +216,8 @@ function earPan(x, z) {
 }
 
 function makeRemote(pi) {
-  const m = makePlayerModel(pi.team, pi.name);
+  const vteam = teamsMode ? pi.team : 1; // без команд все соперники выглядят одинаково
+  const m = makePlayerModel(vteam, pi.name, pi.eq, pi.tag, pi.pl);
   scene.add(m.root);
   return { m, model: m.root, tag: m.tag, team: pi.team, wasAlive: true, deadAt: 0, lx: 0, lz: 0, stepN: 0 };
 }
@@ -197,7 +233,7 @@ function updateRemoteModel(r, x, y, z, yaw, pitch, alv, weapon, dt, nowS) {
     root.visible = true;
     m.setWeapon(clamp(weapon | 0, 0, S.WEAPONS.length - 1));
     m.update(dt, spd, pitch, nowS);
-    r.tag.visible = r.team === myTeam;
+    r.tag.visible = teamsMode && r.team === myTeam;
     if (spd > 2) {
       const n = Math.floor(m.phase / Math.PI);
       if (n !== r.stepN) {
@@ -264,7 +300,7 @@ const sleeveColor = (team) => (team === 0 ? 0x2a4f8a : 0x8e3029);
 function buildViewmodels() {
   for (const v of vmViews) vmScene.remove(v.group);
   vmViews = S.WEAPONS.map((_, i) => {
-    const v = buildViewmodel(i, sleeveColor(myTeam));
+    const v = buildViewmodel(i, sleeveColor(teamsMode ? myTeam : 0), roster.get(myId)?.eq?.gun);
     v.group.visible = false;
     vmScene.add(v.group);
     return v;
@@ -382,10 +418,10 @@ function addKill(d) {
   const k = roster.get(d.k), v = roster.get(d.v);
   const row = document.createElement('div');
   row.className = 'k' + (d.k === myId || d.v === myId ? ' me' : '');
-  const a = document.createElement('span'); a.className = 'c' + (k?.team ?? 0); a.textContent = k?.name || '?';
+  const a = document.createElement('span'); a.className = 'c' + (k?.team ?? 0); a.textContent = dispName(k);
   const mid = document.createElement('span');
   mid.textContent = ` [${S.WEAPONS[d.w]?.short || '?'}${d.hs ? ' 🎯' : ''}${d.d >= 5 ? ' ' + d.d + 'м' : ''}] `;
-  const b = document.createElement('span'); b.className = 'c' + (v?.team ?? 1); b.textContent = v?.name || '?';
+  const b = document.createElement('span'); b.className = 'c' + (v?.team ?? 1); b.textContent = dispName(v);
   row.append(a, mid, b);
   el.feed.appendChild(row);
   while (el.feed.children.length > 5) el.feed.firstChild.remove();
@@ -424,18 +460,21 @@ function onMyKill(d) {
   if (multi.n >= 2) { banner(MULTI[Math.min(5, multi.n)]); audio.streak(multi.n); }
   else if (killStreak === 5 || killStreak === 10 || killStreak === 15) { banner(`СЕРИЯ ×${killStreak}`); audio.streak(4); }
   else if (d.hs) banner('В ГОЛОВУ!');
-  flashMsg('', `Вы убили: ${v?.name || '?'}${d.d >= 5 ? ` · ${d.d} м` : ''}`, 1500);
+  flashMsg('', `Вы убили: ${dispName(v)}${d.d >= 5 ? ` · ${d.d} м` : ''}`, 1500);
 }
 
 function buildScoreboard() {
   if (!lastSnap) return;
   el.sb.replaceChildren();
-  for (const team of [0, 1]) {
-    const rows = lastSnap.p.filter((r) => roster.get(r[0])?.team === team).sort((a, b) => b[8] - a[8] || a[9] - b[9]);
+  const groups = teamsMode ? [0, 1] : [-1];
+  for (const team of groups) {
+    const rows = lastSnap.p.filter((r) => team < 0 || roster.get(r[0])?.team === team)
+      .sort((a, b) => (gunMode ? (b[10] || 0) - (a[10] || 0) : 0) || b[8] - a[8] || a[9] - b[9]);
     const table = document.createElement('table');
     const head = document.createElement('tr');
-    head.className = 'head' + team;
-    for (const [i, t] of [`${S.TEAM_NAMES[team]} — ${lastSnap.sc[team]}`, 'У', 'С'].entries()) {
+    head.className = 'head' + (team < 0 ? 0 : team);
+    const cols = team < 0 ? [modeName, gunMode ? 'Этап' : 'У', 'С'] : [`${S.TEAM_NAMES[team]} — ${lastSnap.sc[team]}`, 'У', 'С'];
+    for (const [i, t] of cols.entries()) {
       const th = document.createElement('th'); th.textContent = t; if (i === 0) th.style.textAlign = 'left'; head.appendChild(th);
     }
     table.appendChild(head);
@@ -443,7 +482,7 @@ function buildScoreboard() {
       const pi = roster.get(r[0]);
       const tr = document.createElement('tr');
       tr.className = (r[0] === myId ? 'me ' : '') + (pi?.bot ? 'bot' : '');
-      for (const t of [pi?.name || '?', r[8], r[9]]) { const td = document.createElement('td'); td.textContent = t; tr.appendChild(td); }
+      for (const t of [dispName(pi), gunMode ? `${(r[10] || 0) + 1}/${ggN}` : r[8], r[9]]) { const td = document.createElement('td'); td.textContent = t; tr.appendChild(td); }
       table.appendChild(tr);
     }
     el.sb.appendChild(table);
@@ -479,10 +518,18 @@ function ensureSocket() {
   socket.on('disconnect', () => {
     if (joined) { joined = false; resetNetState(); openMenu(); $('status').textContent = 'Соединение потеряно, переподключаюсь…'; }
   });
-  socket.on('denied', (d) => { wantJoin = false; $('status').textContent = d?.reason || 'Доступ закрыт'; $('playBtn').disabled = false; });
+  socket.on('denied', (d) => {
+    wantJoin = false; $('status').textContent = d?.reason || 'Доступ закрыт'; $('playBtn').disabled = false;
+    if (d?.login) $('loginLink').classList.remove('hidden');
+  });
+  socket.on('reward', (d) => showReward(d));
+  socket.on('ggup', (d) => { flashMsg(`Этап ${d.gg + 1} из ${ggN}`, `Новое оружие: ${(S.WEAPONS[d.w] || {}).name || ''}`, 1800); });
 
   socket.on('welcome', (d) => {
     myId = d.id; myTeam = d.team;
+    modeId = d.mode || 'tdm'; modeName = d.modeName || 'Командный бой'; teamsMode = d.teams !== 0; modeLim = d.lim || 0; ggN = d.ggN || 5; gunMode = modeId === 'gg';
+    $('wbar').classList.toggle('hidden', gunMode);
+    $('modeTag').textContent = modeName;
     setRoster(d.players);
     resetNetState();
     joined = true;
@@ -493,7 +540,7 @@ function ensureSocket() {
     $('touch').classList.remove('hidden');
     closeMenu();
     lockPointer();
-    flashMsg(`Вы в команде «${S.TEAM_NAMES[myTeam]}»`, `Боты: ${d.skillName || 'Лёгкие'}`, 3000);
+    flashMsg(teamsMode ? `Вы в команде «${S.TEAM_NAMES[myTeam]}»` : modeName, `${MODE_GOAL[modeId] || ''} · боты: ${d.skillName || 'Лёгкие'}`, 3200);
   });
   socket.on('roster', (d) => setRoster(d.players));
 
@@ -526,7 +573,7 @@ function ensureSocket() {
     if (d.k === myId) onMyKill(d);
   });
   socket.on('over', (d) => showEnd(d));
-  socket.on('start', () => { $('endscreen').classList.add('hidden'); matchState = 0; syncScoreboard(); flashMsg('Новый матч!', '', 2000); });
+  socket.on('start', () => { $('endscreen').classList.add('hidden'); $('endReward').textContent = ''; matchState = 0; syncScoreboard(); flashMsg('Новый матч!', '', 2000); });
 
   setInterval(() => {
     if (!socket?.connected) return;
@@ -542,10 +589,25 @@ function resetNetState() {
   alive = false;
 }
 
-function doJoin() {
+async function doJoin() {
+  if (!accountDone) await accountReady;
   const name = ($('nameInput').value || '').trim().slice(0, 16);
-  localStorage.setItem('af_name', name);
-  socket.emit('join', { name, initData: tg?.initData || '', touch: isTouch, skill: parseInt($('skill').value, 10) || 0 });
+  if (!account) localStorage.setItem('af_name', name);
+  const mode = ['quick', 'create', 'room', 'code'].includes(Q.get('mode')) ? Q.get('mode') : 'quick';
+  const skill = Q.get('skill') !== null ? parseInt(Q.get('skill'), 10) || 0 : parseInt($('skill').value, 10) || 0;
+  socket.emit('join', {
+    mode, skill, roomId: parseInt(Q.get('room'), 10) || 0, code: Q.get('code') || '', roomName: Q.get('rn') || '', priv: Q.get('priv') === '1',
+    gm: ['tdm', 'hs', 'ffa', 'gg'].includes(Q.get('gm')) ? Q.get('gm') : 'tdm', guest: !account, name, touch: isTouch,
+  });
+}
+
+// Награда за матч приходит от сервера чуть позже итогов.
+let lastReward = null;
+function rewardText(d) { return `+${d.xp} опыта · +${d.coins} монет${d.levelUp ? ` · НОВЫЙ УРОВЕНЬ ${d.level}!` : ''}`; }
+function showReward(d) {
+  lastReward = d;
+  $('endReward').textContent = rewardText(d);
+  if (d.levelUp) flashMsg('НОВЫЙ УРОВЕНЬ', `Теперь у вас ${d.level} уровень`, 3500);
 }
 
 function onSnap(s) {
@@ -592,8 +654,13 @@ function onSnap(s) {
     audio.die();
   }
 
-  el.s0.textContent = s.sc[0];
-  el.s1.textContent = s.sc[1];
+  if (teamsMode) { el.s0.textContent = s.sc[0]; el.s1.textContent = s.sc[1]; }
+  else { // свои очки против лучшего соперника
+    let mine = 0, best = 0;
+    for (const r of s.p) { const v = gunMode ? (r[10] || 0) : r[8]; if (r[0] === myId) mine = v; else if (v > best) best = v; }
+    el.s0.textContent = gunMode ? `${mine + 1}/${ggN}` : mine; el.s1.textContent = gunMode ? `${best + 1}/${ggN}` : best;
+  }
+  if (gunMode && alive && m.w !== selWeapon) { selWeapon = m.w; vm.swap = 1; vm.cyc = -1; input.ads = false; localBloom = 0; audio.swap(); updateAmmo(); }
   el.timer.textContent = fmtTime(s.rem);
   if (s.st === 1) updateEndCountdown(s);
   syncScoreboard();
@@ -603,16 +670,17 @@ function onSnap(s) {
 
 function showEnd(d) {
   matchState = 1;
-  const win = d.winner;
-  const title = win === -1 ? 'НИЧЬЯ' : win === myTeam ? 'ПОБЕДА' : 'ПОРАЖЕНИЕ';
-  $('endTitle').textContent = title;
-  $('endTitle').style.color = win === -1 ? '#fff' : win === myTeam ? '#4ade80' : '#f87171';
-  $('endSub').textContent = `${S.TEAM_NAMES[0]} ${d.scores[0]} : ${d.scores[1]} ${S.TEAM_NAMES[1]}`;
+  const draw = teamsMode ? d.winner === -1 : !d.winId;
+  const won = teamsMode ? d.winner === myTeam : d.winId === myId;
+  $('endTitle').textContent = draw ? 'НИЧЬЯ' : won ? 'ПОБЕДА' : 'ПОРАЖЕНИЕ';
+  $('endTitle').style.color = draw ? '#fff' : won ? '#4ade80' : '#f87171';
+  $('endSub').textContent = teamsMode ? `${S.TEAM_NAMES[0]} ${d.scores[0]} : ${d.scores[1]} ${S.TEAM_NAMES[1]}` : (roster.get(d.winId) ? `Победитель: ${dispName(roster.get(d.winId))}` : modeName);
+  $('endReward').textContent = account ? 'Начисляем награду…' : 'Войдите в аккаунт, чтобы копить опыт и монеты';
   $('endscreen').classList.remove('hidden');
   syncScoreboard();
 }
 function updateEndCountdown(s) {
-  $('endSub').textContent = `${S.TEAM_NAMES[0]} ${s.sc[0]} : ${s.sc[1]} ${S.TEAM_NAMES[1]} · новый матч через ${s.rem}`;
+  $('endSub').textContent = (teamsMode ? `${S.TEAM_NAMES[0]} ${s.sc[0]} : ${s.sc[1]} ${S.TEAM_NAMES[1]}` : (roster.get(s.wid) ? `Победитель: ${dispName(roster.get(s.wid))}` : modeName)) + ` · новый матч через ${s.rem}`;
 }
 
 function onShot(d) {
@@ -621,6 +689,7 @@ function onShot(d) {
   const ox = d.o[0], oy = d.o[1], oz = d.o[2];
   const b = basis();
   let whizD = 99, whizSide = 0;
+  const tracerColor = ITEM_BY_ID[roster.get(d.id)?.eq?.tracer]?.color ?? 0xffe3a0;
   for (const e of d.e) {
     let dx = e[0] - ox, dy = e[1] - oy, dz = e[2] - oz;
     const len = Math.hypot(dx, dy, dz);
@@ -637,7 +706,7 @@ function onShot(d) {
       const rx = -dz, rz = dx, rl = Math.hypot(rx, rz) || 1;
       sx = ox + dx * 0.9 + (rx / rl) * 0.18; sy = oy - 0.27 + dy * 0.9; sz = oz + dz * 0.9 + (rz / rl) * 0.18;
     }
-    fx.tracer({ x: sx, y: sy, z: sz }, { x: e[0], y: e[1], z: e[2] });
+    fx.tracer({ x: sx, y: sy, z: sz }, { x: e[0], y: e[1], z: e[2] }, 300, tracerColor);
     if (len < w.range - 1) {
       if (e[3]) fx.blood(e[0], e[1], e[2], dx, dy, dz, e[4] === 2);
       else fx.impact(e[0], e[1], e[2], dx, dy, dz, d.w === 4 ? 1.6 : d.w === 2 ? 0.8 : 1);
@@ -698,7 +767,7 @@ function applyLook(dx, dy, mult) {
 }
 
 function changeWeapon(i) {
-  if (i === selWeapon || i < 0 || i >= S.WEAPONS.length || !joined || !alive) return;
+  if (gunMode || i === selWeapon || i < 0 || i >= S.WEAPONS.length || !joined || !alive) return;
   selWeapon = i;
   vm.swap = 1; vm.cyc = -1;
   input.ads = false;
@@ -893,7 +962,15 @@ function closeMenu() {
   $('menu').classList.add('hidden');
 }
 
-$('nameInput').value = localStorage.getItem('af_name') || tg?.initDataUnsafe?.user?.first_name || '';
+$('nameInput').value = localStorage.getItem('af_name') || '';
+accountReady.then(() => {
+  const guest = !account;
+  $('nameRow').classList.toggle('hidden', !guest);
+  $('loginLink').classList.toggle('hidden', !guest);
+  $('who').textContent = guest ? 'Вы играете как гость: прогресс не сохраняется' : `${account.nick} · ур. ${account.level} · ${account.rank}`;
+});
+const modeText = { quick: 'Быстрая игра', create: 'Новая комната', room: 'Комната из списка', code: 'Комната по коду' }[Q.get('mode')] || 'Быстрая игра';
+$('modeLine').textContent = modeText + (Q.get('mode') === 'code' && Q.get('code') ? ` · ${Q.get('code').toUpperCase()}` : '');
 $('sens').value = String(sens);
 $('skill').value = localStorage.getItem('af_skill') ?? '0';
 $('skill').addEventListener('change', (e) => localStorage.setItem('af_skill', e.target.value));
@@ -912,7 +989,6 @@ function toggleFullscreen(forceEnter = false) {
       if (!forceEnter) (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
       return;
     }
-    if (tg?.requestFullscreen && tg.initData) { tg.requestFullscreen(); return; }
     const d = document.documentElement;
     const rq = d.requestFullscreen || d.webkitRequestFullscreen;
     if (!rq) return;
@@ -922,8 +998,8 @@ function toggleFullscreen(forceEnter = false) {
   } catch { /* ignore */ }
 }
 // iPhone в обычном браузере не умеет Fullscreen API — подсказываем установку на экран «Домой»
-$('iosHint').classList.toggle('hidden', !(isIOS && !isStandalone && !tg?.initData));
-$('fsBtn').classList.toggle('hidden', !canFs && !tg?.requestFullscreen);
+$('iosHint').classList.toggle('hidden', !(isIOS && !isStandalone));
+$('fsBtn').classList.toggle('hidden', !canFs);
 $('fsBtn').addEventListener('click', () => toggleFullscreen());
 hold($('bFull'), () => toggleFullscreen());
 
@@ -948,7 +1024,7 @@ function updateTargetLock() {
     const cp = Math.cos(view.pitch);
     const dx = -Math.sin(view.yaw) * cp, dy = Math.sin(view.pitch), dz = -Math.cos(view.yaw) * cp;
     for (const r of remotes.values()) {
-      if (r.team === myTeam || !r.wasAlive || !r.model.visible) continue;
+      if (!isEnemy(r.team) || !r.wasAlive || !r.model.visible) continue;
       const p = r.model.position;
       const t = S.rayAABB(ox, oy, oz, dx, dy, dz, p.x - 0.55, p.y, p.z - 0.55, p.x + 0.55, p.y + 1.85, p.z + 0.55);
       if (t < S.WEAPONS[selWeapon].range && S.rayWorld(ox, oy, oz, dx, dy, dz, t) >= t) { hit = true; break; }
@@ -959,13 +1035,16 @@ function updateTargetLock() {
 }
 
 // ---------- Авто-огонь: стреляем сами, пока враг под прицелом ----------
-let autoFire = localStorage.getItem('af_auto') === null ? isTouch : localStorage.getItem('af_auto') === '1';
+let autoFire = isTouch && (localStorage.getItem('af_auto') === null ? true : localStorage.getItem('af_auto') === '1');
 function setAuto(on) {
-  autoFire = !!on;
+  autoFire = isTouch && !!on; // на ПК авто-огня нет — честная игра мышью
   try { localStorage.setItem('af_auto', autoFire ? '1' : '0'); } catch { /* ignore */ }
   $('autoFire').checked = autoFire;
   $('bAuto').classList.toggle('on', autoFire);
 }
+$('autoRow').classList.toggle('hidden', !isTouch); // авто-огня на ПК нет
+$('quality').value = quality;
+$('quality').addEventListener('change', (e) => { try { localStorage.setItem('af_quality', e.target.value); } catch { /* ignore */ } $('status').textContent = 'Качество применится после перезагрузки страницы'; });
 $('autoFire').addEventListener('change', (e) => setAuto(e.target.checked));
 hold($('bAuto'), () => setAuto(!autoFire));
 setAuto(autoFire);
@@ -1108,5 +1187,9 @@ window.__arena = {
   fx, audio, scene, vmScene,
   get vmPos() { const v = vmViews[selWeapon]; return v ? v.group.position : null; },
   get vmShown() { return vmShown; },
+  get mode() { return modeId; },
+  get teams() { return teamsMode; },
+  get gun() { return gunMode; },
+  get sel() { return selWeapon; },
   get scoped() { return scopeOn(); },
 };

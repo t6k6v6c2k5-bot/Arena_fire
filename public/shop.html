@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0c1216">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Arena Fire">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<title>Магазин — Arena Fire</title>
+<meta name="description" content="Скины оружия, броня и трассеры">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=Tektur:wght@500;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/site.css">
+</head>
+<body>
+<main class="wrap"><div class="pagehead"><div><h1>Магазин</h1><div class="muted">Только внешний вид — на баланс стрельбы не влияет</div></div><div class="chip coin" id="bal"></div></div>
+<div class="tabs" id="tabs"><button data-t="gun">Оружие</button><button data-t="armor">Броня</button><button data-t="tracer">Трассеры</button></div>
+<div class="grid g3" id="items"></div></main>
+<script type="module">
+import { boot, api, esc, fmt, toast, tagHtml, lvlHtml, kd, pct, nextUrl, getMe, $, $$ } from '/site.js';
+
+await boot('/shop', { need: true });
+let S = await api('/shop'), type = 'gun';
+const hex = (n) => '#' + (n >>> 0).toString(16).padStart(6, '0');
+const swatch = (it) => {
+  if (it.type === 'gun') { const [r, g, b] = it.tint.map((v) => Math.min(255, Math.round(v * 150))); return `background:linear-gradient(135deg, rgb(${r},${g},${b}), #1b232e);">🔫`; }
+  if (it.type === 'armor') return `background:linear-gradient(135deg, ${hex(it.plate)}, ${hex(it.vest)} 55%, ${hex(it.pack)});">🛡️`;
+  return `background:#0b1118;"><span style="display:block;width:70%;height:6px;border-radius:9px;background:${hex(it.color)};box-shadow:0 0 14px 3px ${hex(it.color)}"></span>`;
+};
+function render() {
+  $('#bal').textContent = '🪙 ' + fmt(S.coins);
+  $$('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.t === type));
+  $('#items').innerHTML = S.items.filter((i) => i.type === type).map((it) => {
+    const owned = S.owned.includes(it.id), eq = S.equipped[it.type] === it.id, locked = !owned && S.level < it.lvl;
+    const act = eq ? '<button class="btn sm ghost" disabled>Надето</button>' : owned ? `<button class="btn sm" data-eq="${it.id}">Надеть</button>`
+      : locked ? `<button class="btn sm ghost" disabled>Нужен ур. ${it.lvl}</button>` : `<button class="btn sm" data-buy="${it.id}" ${S.coins < it.price ? 'disabled' : ''}>Купить</button>`;
+    return `<div class="card item ${eq ? 'eq' : ''} ${locked ? 'lock' : ''}">${eq ? '<span class="badge">НАДЕТО</span>' : ''}<div class="sw" style="${swatch(it)}</div>
+      <div><b>${esc(it.name)}</b><div class="muted small">${owned ? 'Куплено' : it.price ? `<span class="coin">🪙 ${fmt(it.price)}</span> · уровень ${it.lvl}` : 'Бесплатно'}</div></div>${act}</div>`;
+  }).join('');
+}
+async function refresh(u) { S = await api('/shop'); render(); }
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  try {
+    if (b.dataset.buy) { await api('/shop/buy', { id: b.dataset.buy }); toast('Куплено!', 'good'); await refresh(); }
+    else if (b.dataset.eq) { await api('/shop/equip', { id: b.dataset.eq }); toast('Надето — увидите в следующей игре', 'good'); await refresh(); }
+  } catch (x) { toast(x.message, 'bad'); }
+});
+$$('#tabs button').forEach((b) => b.addEventListener('click', () => { type = b.dataset.t; render(); }));
+render();
+</script>
+</body>
+</html>

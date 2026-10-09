@@ -349,26 +349,39 @@ export class MemoryStore {
   }
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Внутренняя сеть Railway в первые секунды после старта контейнера может ещё не знать адрес базы (ENOTFOUND),
+// поэтому подключение пробуем несколько раз, а в память переходим только если база так и не ответила.
 export async function createStore(env = process.env, log = console) {
   const url = env.DATABASE_URL;
-  if (url) {
-    try {
-      const pg = await import('pg');
-      const Pool = pg.Pool || pg.default.Pool;
+  if (!url) {
+    log.warn('DATABASE_URL не задан: данные хранятся в памяти и пропадут при перезапуске');
+    return new MemoryStore();
+  }
+  const tries = Math.max(1, Number(env.PG_RETRIES) || 8), gap = Number(env.PG_RETRY_MS) || 2500;
+  let last = null;
+  try {
+    const pg = await import('pg');
+    const Pool = pg.Pool || pg.default.Pool;
+    for (let i = 1; i <= tries; i++) {
       const pool = new Pool({ connectionString: url, max: 8, ssl: env.PGSSL === '1' ? { rejectUnauthorized: false } : undefined });
       pool.on('error', (e) => log.error('pg pool error', e.message));
-      const store = new PgStore(pool);
-      await store.init();
-      log.log('База данных: PostgreSQL');
-      return store;
-    } catch (e) {
-      log.error('PostgreSQL недоступен, работаем в памяти:', e.message);
-      const mem = new MemoryStore();
-      mem.degraded = true; // сайт покажет предупреждение: прогресс не сохраняется
-      return mem;
+      try {
+        const store = new PgStore(pool);
+        await store.init();
+        log.log('База данных: PostgreSQL');
+        return store;
+      } catch (e) {
+        last = e;
+        log.warn(`PostgreSQL пока недоступен (попытка ${i} из ${tries}): ${e.message}`);
+        try { await pool.end(); } catch { /* ignore */ }
+        if (i < tries) await sleep(gap);
+      }
     }
-  } else {
-    log.warn('DATABASE_URL не задан: данные хранятся в памяти и пропадут при перезапуске');
-  }
-  return new MemoryStore();
+  } catch (e) { last = e; }
+  log.error('PostgreSQL недоступен, работаем в памяти:', last && last.message);
+  const mem = new MemoryStore();
+  mem.degraded = true; // сайт покажет предупреждение: прогресс не сохраняется
+  return mem;
 }

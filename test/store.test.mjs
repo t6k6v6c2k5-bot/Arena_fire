@@ -79,3 +79,15 @@ await run('память', new MemoryStore());
 const up = spawnSync('psql', ['-h', '/tmp', '-p', '5433', '-U', 'postgres', '-d', 'af', '-q', '-c', 'drop schema public cascade; create schema public;']);
 if (up.status === 0) await run('PostgreSQL', new PgStore(psqlPool()));
 else console.log('store.test: локальный PostgreSQL не запущен — проверена только память');
+
+// createStore: без адреса — память без предупреждения; с адресом, но без доступной базы — память с предупреждением
+{
+  const { createStore } = await import('../db.js');
+  const quiet = { log() {}, warn() {}, error() {} };
+  const s1 = await createStore({}, quiet);
+  assert.equal(s1.kind, 'memory'); assert.ok(!s1.degraded);
+  const t0 = Date.now();
+  const s2 = await createStore({ DATABASE_URL: 'postgresql://x:y@127.0.0.1:1/none', PG_RETRIES: '2', PG_RETRY_MS: '10' }, quiet);
+  assert.equal(s2.kind, 'memory'); assert.equal(s2.degraded, true);
+  assert.ok(Date.now() - t0 < 5000, 'ожидание не должно затягиваться');
+}

@@ -166,11 +166,11 @@ io.on('connection', (socket) => {
         const owned = [...new Set([...FREE_ITEMS, ...(await store.owned(user.id))])];
         const clan = user.clan_id ? await store.clanById(user.clan_id) : null;
         name = user.nick;
-        extra = { uid: user.id, equip: cleanEquip(user.equipped, owned), tag: clan ? clan.tag : '', level: levelFromXp(user.xp) };
+        extra = { loadout: data.loadout, uid: user.id, equip: cleanEquip(user.equipped, owned), tag: clan ? clan.tag : '', level: levelFromXp(user.xp) };
         uid = user.id; inGame.set(uid, socket.id);
       } else {
         name = cleanName(data.name);
-        extra = { equip: { ...DEFAULT_EQUIP }, tag: 'ГОСТЬ' };
+        extra = { loadout: data.loadout, equip: { ...DEFAULT_EQUIP }, tag: 'ГОСТЬ' };
       }
       room = r;
       me = room.addHuman(socket, name, extra);

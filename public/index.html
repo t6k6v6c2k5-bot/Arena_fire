@@ -25,7 +25,7 @@
     <p class="lead">Arena Fire — командный шутер прямо в браузере. Откройте ссылку, выберите режим и вы уже на арене: с друзьями, с ботами или с незнакомцами, которые скоро станут соперниками.</p>
     <div class="cta" id="cta">
       <a class="btn big" href="/register">Создать аккаунт</a>
-      <a class="btn big ghost" href="/play?mode=quick&skill=0">Сначала просто попробую</a>
+      <a class="btn big ghost" href="/play">Сначала просто попробую</a>
     </div>
     <div class="live"><span><span class="dot"></span> сейчас в игре <b id="sOnline">–</b></span><span>бойцов зарегистрировано <b id="sUsers">–</b></span><span>матчей сыграно <b id="sMatches">–</b></span></div>
   </div>
@@ -38,7 +38,7 @@
 
 <section class="sect"><div class="wrap">
   <h2>Выберите, как сегодня играть</h2>
-  <p class="sub">Четыре режима, и в каждом можно позвать друзей в свою комнату по короткому коду.</p>
+  <p class="sub">Пять режимов, и в каждом можно позвать друзей в свою комнату по короткому коду.</p>
   <div class="modes" id="modes"></div>
 </div></section>
 
@@ -76,7 +76,8 @@
 <section class="sect"><div class="wrap">
   <h2>Что нового</h2>
   <div class="log">
-    <div><time>Октябрь 2026</time><span><b>Режимы, общие комнаты и новый вид сайта</b>Четыре режима, достижения, настройка графики, а ещё теперь игроки с телефонов и компьютеров играют вместе.</span></div>
+    <div><time>Октябрь 2026</time><span><b>Захват точки, десять видов оружия и новый экран выбора</b>Перед боем выбираете режим, комнату и свой набор из трёх стволов. Бой получил радар, полосу патронов и зону, за которую дерутся команды.</span></div>
+    <div><time>Октябрь 2026</time><span><b>Режимы, общие комнаты и новый вид сайта</b>Режимы, достижения, настройка графики, а ещё теперь игроки с телефонов и компьютеров играют вместе.</span></div>
     <div><time>Октябрь 2026</time><span><b>Аккаунты, кланы и магазин</b>Профиль со статистикой, рейтинг, кланы, расцветки и ежедневный бонус за возвращение.</span></div>
     <div><time>Октябрь 2026</time><span><b>Новые бойцы и оружие</b>Мы перерисовали солдат и стволы, добавили руки и анимации.</span></div>
   </div>
@@ -87,14 +88,15 @@
 import { boot, api, esc, fmt, toast, tagHtml, lvlHtml, kd, pct, nextUrl, getMe, store, platform, detectPlatform, ICON, MODE_ICON, $, $$ } from '/site.js';
 
 const u = await boot('/');
-if (u) $('#cta').innerHTML = '<a class="btn big" href="/lobby">В лобби</a><a class="btn big ghost" href="/profile">Мой профиль</a>';
+if (u) $('#cta').innerHTML = '<a class="btn big" href="/play">Играть</a><a class="btn big ghost" href="/lobby">В лобби</a>';
 const MODES = [
   ['tdm', 'Командный бой', 'Четверо на четверо. Держитесь вместе, прикрывайте друг друга и берите арену.', '5 минут'],
+  ['hill', 'Захват точки', 'На карте появляется зона. Пока в ней только ваши, команде идут очки. Через сорок секунд она переезжает.', '6 минут'],
   ['hs', 'Только хедшоты', 'Целься выше. Здесь считается только голова, так что каждый выстрел на счету.', '5 минут'],
   ['ffa', 'Каждый за себя', 'Никаких союзников и никакой пощады. Остаётся один.', '5 минут'],
   ['gg', 'Гонка вооружений', 'С каждым убийством оружие меняется. Кто первым пройдёт весь список, тот и победил.', '7 минут'],
 ];
-$('#modes').innerHTML = MODES.map(([id, n, d, m]) => `<a class="mode" href="${u ? '/lobby?gm=' + id : '/play?mode=quick&skill=0&gm=' + id}"><div class="ic">${MODE_ICON[id]}</div><div><h3>${n}</h3><p>${d}</p></div><div class="meta">${m}</div></a>`).join('');
+$('#modes').innerHTML = MODES.map(([id, n, d, m]) => `<a class="mode" href="/play?gm=${id}"><div class="ic">${MODE_ICON[id]}</div><div><h3>${n}</h3><p>${d}</p></div><div class="meta">${m}</div></a>`).join('');
 api('/stats').then((s) => { $('#sOnline').textContent = fmt(s.online); $('#sUsers').textContent = fmt(s.users); $('#sMatches').textContent = fmt(s.matches); $('#sKills').textContent = fmt(s.kills); }).catch(() => {});
 api('/leaderboard?by=xp').then((d) => {
   const rows = d.rows.slice(0, 5);

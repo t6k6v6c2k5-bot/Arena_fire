@@ -9,6 +9,11 @@ const SHOT = [
   { lp: 1900, nd: 0.46, ng: 0.95, f0: 115, f1: 32, bd: 0.28, bg: 0.75, crack: 0.12, echo: 0.42 },  // дробовик
   { lp: 5200, nd: 0.09, ng: 0.42, f0: 240, f1: 90, bd: 0.07, bg: 0.32, crack: 0.30, echo: 0.20 },  // ПП
   { lp: 2500, nd: 0.70, ng: 0.90, f0: 95, f1: 26, bd: 0.40, bg: 0.80, crack: 0.45, echo: 0.62 },   // снайперка
+  { lp: 4000, nd: 0.16, ng: 0.50, f0: 170, f1: 55, bd: 0.11, bg: 0.45, crack: 0.30, echo: 0.26 },  // карабин
+  { lp: 2800, nd: 0.26, ng: 0.65, f0: 130, f1: 38, bd: 0.18, bg: 0.62, crack: 0.22, echo: 0.36 },  // пулемёт
+  { lp: 3000, nd: 0.30, ng: 0.80, f0: 120, f1: 40, bd: 0.22, bg: 0.70, crack: 0.40, echo: 0.45 },  // револьвер
+  { lp: 3000, nd: 0.45, ng: 0.80, f0: 105, f1: 32, bd: 0.28, bg: 0.70, crack: 0.40, echo: 0.50 },  // марксманка
+  { lp: 2000, nd: 0.36, ng: 0.85, f0: 120, f1: 34, bd: 0.22, bg: 0.70, crack: 0.14, echo: 0.38 },  // боевой дробовик
 ];
 
 export function createAudio() {
@@ -106,8 +111,9 @@ export function createAudio() {
     burst(out, t, P.nd, 'lowpass', P.lp * far, P.lp * 0.25, 0.7, P.ng);
     burst(out, t, P.nd * 0.25, 'highpass', 2500, 5000, 0.5, P.crack * far);
     tone(out, t, P.bd, P.f0, P.f1, 'sine', P.bg);
-    if (w === 2) burst(out, t + 0.02, 0.3, 'bandpass', 600, 250, 1.1, 0.35);
+    if (w === 2 || w === 9) burst(out, t + 0.02, 0.3, 'bandpass', 600, 250, 1.1, 0.35);
     if (w === 4) { tone(out, t, 0.5, 60, 28, 'triangle', 0.5); burst(out, t + 0.05, 0.6, 'bandpass', 900, 200, 0.9, 0.18); }
+    if (w === 8 || w === 7) { tone(out, t, 0.3, 70, 32, 'triangle', 0.32); burst(out, t + 0.04, 0.4, 'bandpass', 1100, 300, 0.9, 0.12); }
   };
 
   A.click = (f = 300, vol = 0.12) => {
@@ -129,7 +135,7 @@ export function createAudio() {
     if (w === 2) { // дробовик: патроны по одному и помпа
       for (let i = 0; i < 3; i++) mech(t + dur * (0.16 + i * 0.18), 0.8, 0.22, out);
       mech(t + dur * 0.82, 0.6, 0.35, out); mech(t + dur * 0.9, 0.9, 0.35, out);
-    } else if (w === 4) {
+    } else if (w === 4 || w === 7) {
       mech(t + dur * 0.3, 0.8, 0.22, out); mech(t + dur * 0.62, 1.0, 0.26, out);
       mech(t + dur * 0.82, 0.6, 0.35, out); mech(t + dur * 0.9, 1.0, 0.3, out);
     } else {

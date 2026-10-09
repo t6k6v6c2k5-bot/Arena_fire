@@ -137,7 +137,7 @@ function duel() {
 
 // 7a. Новые стволы: падение урона с дистанции, рост разброса, снайперка убивает выстрелом в голову.
 {
-  assert.equal(S.WEAPONS.length, 5);
+  assert.equal(S.WEAPONS.length, 10);
   const { room, a, b, sockA } = duel();
   a.ads = true; a.assist = 0;
   // ближний выстрел против дальнего (линия z=18 свободна по всей длине)
@@ -376,14 +376,14 @@ function duel() {
   assert.equal(A.weapon, S.GG_ORDER[0], 'в гонке вооружений нельзя менять оружие');
   const victims = room.bots();
   for (let i = 1; i < S.GG_ORDER.length; i++) {
-    const v = victims[i]; v.alive = true; v.hp = 10; v.protectUntil = 0;
+    const v = victims[i % victims.length]; v.alive = true; v.hp = 10; v.protectUntil = 0;
     room.damage(A, v, 99, false, 5);
     assert.equal(A.gg, i); assert.equal(A.weapon, S.GG_ORDER[i], `этап ${i}`);
     assert.equal(A.wp[A.weapon].mag, S.WEAPONS[A.weapon].mag);
     assert.ok(sa.last.ggup && sa.last.ggup.gg === i);
   }
   assert.equal(room.state, 0);
-  const v = victims[6]; v.alive = true; v.hp = 10; v.protectUntil = 0;
+  const v = victims[S.GG_ORDER.length % victims.length]; v.alive = true; v.hp = 10; v.protectUntil = 0;
   room.damage(A, v, 99, false, 5);
   assert.equal(room.state, 1); assert.equal(room.winId, A.id, 'победа после последнего этапа');
   // смерть не сбрасывает этап
@@ -414,6 +414,64 @@ function duel() {
   assert.equal(rr.rosterEntry(hp).pl, 'm');
   assert.equal(rr.platform, undefined);
   assert.equal(new Room(95, 0, { mode: 'нет такого' }).mode.id, 'tdm');
+}
+{
+  // Набор оружия: только допустимые слоты, переключать можно лишь между своими
+  assert.deepEqual(S.cleanLoadout([6, 9, 7]), [6, 9, 7]);
+  assert.deepEqual(S.cleanLoadout([1, 1, 1]), S.DEFAULT_LOADOUT, 'пистолет в основной слот не пускаем');
+  assert.deepEqual(S.cleanLoadout('мусор'), S.DEFAULT_LOADOUT);
+  assert.deepEqual(S.cleanLoadout([99, -1, 0.5]), S.DEFAULT_LOADOUT);
+  const room = new Room(96, 0, {});
+  const A = room.addHuman(fakeSock(), 'A', { loadout: [8, 4, 7] });
+  room.fillBots(); tickN(room, 40);
+  assert.equal(A.weapon, 8, 'в бой выходим с основным оружием набора');
+  room.applyInput(A, { mx: 0, mz: 0, yaw: 0, pitch: 0, weapon: 2, rt: Date.now() });
+  assert.equal(A.weapon, 8, 'оружия вне набора брать нельзя');
+  room.applyInput(A, { mx: 0, mz: 0, yaw: 0, pitch: 0, weapon: 7, rt: Date.now() });
+  assert.equal(A.weapon, 7);
+  for (const b of room.bots()) assert.ok(S.WEAPONS[b.weapon].slot === 0, 'у ботов основное оружие');
+  // новое оружие стреляет и считается по характеристикам
+  for (const i of [5, 6, 7, 8, 9]) {
+    const w = S.WEAPONS[i];
+    assert.ok(w && w.dmg > 0 && w.rate > 0 && w.mag > 0, 'описание оружия ' + i);
+    if (w.pellets === 1) assert.ok(w.dmg * w.head >= 100 || w.auto, 'одиночные мощные выстрелы в голову убивают');
+  }
+}
+{
+  // Захват точки: очки идут команде, которая одна в зоне; спор — очки стоят; зона переезжает
+  const room = new Room(97, 0, { mode: 'hill' });
+  const sa = fakeSock();
+  const A = room.addHuman(sa, 'A');
+  room.fillBots(); tickN(room, 40);
+  const h = S.HILLS[room.hill.idx];
+  for (const p of room.players.values()) { p.x = -30; p.z = 20; p.alive = true; p.protectUntil = 1e9; p.respawnAt = 1e9; }
+  const hold = (p) => { p.x = h.x + 1; p.z = h.z + 1; };
+  A.team = 0; hold(A);
+  const s0 = room.scores[0];
+  for (let i = 0; i < S.TICK * 5 + 2; i++) { room.hillTick(); }
+  assert.ok(room.scores[0] - s0 >= 4 && room.scores[0] - s0 <= 5, 'очки идут одной команде: ' + (room.scores[0] - s0));
+  assert.equal(room.scores[1], 0);
+  assert.equal(room.hill.owner, 0);
+  const foe = room.bots().find((b) => b.team === 1); foe.x = h.x - 1; foe.z = h.z;
+  const s1 = room.scores[0];
+  for (let i = 0; i < S.TICK * 3; i++) room.hillTick();
+  assert.equal(room.hill.owner, 2, 'обе команды — зона спорная');
+  assert.equal(room.scores[0], s1, 'при споре очки стоят');
+  // убийства очков не дают
+  const k0 = room.scores[0] + room.scores[1];
+  foe.alive = true; foe.hp = 5; foe.protectUntil = 0;
+  room.damage(A, foe, 50, false, 3);
+  assert.equal(room.scores[0] + room.scores[1], k0, 'в режиме точки очки только за зону');
+  // зона переезжает
+  const idx0 = room.hill.idx;
+  for (let i = 0; i < S.TICK * S.HILL_TIME + 5; i++) room.hillTick();
+  assert.notEqual(room.hill.idx, idx0);
+  // снимок содержит зону
+  room.sendSnapshots(Date.now());
+  assert.equal(sa.last.snap.hl.length, 5);
+  // победа по лимиту очков
+  room.scores[0] = room.mode.killLimit - 1; room.hill.acc[0] = 0.99; foe.x = -30; foe.z = 20; { const h2 = S.HILLS[room.hill.idx]; A.x = h2.x + 1; A.z = h2.z + 1; } room.hillTick(); room.hillTick();
+  assert.equal(room.state, 1, 'матч закончился по очкам'); assert.equal(room.winner, 0);
 }
 
 console.log('game.test.js: все проверки пройдены');

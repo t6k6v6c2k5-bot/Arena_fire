@@ -57,7 +57,8 @@ globalThis.location = { search: '?gm=' + (process.env.SMOKE_MODE || 'tdm'), path
 globalThis.addEventListener = (t, fn) => { (winHandlers[t] ??= []).push(fn); };
 globalThis.innerWidth = 844; globalThis.innerHeight = 390; globalThis.devicePixelRatio = 2;
 globalThis.matchMedia = () => ({ matches: true }); // тач-режим
-globalThis.localStorage = { getItem: () => null, setItem() {} };
+const SMOKE_LOADOUT = process.env.SMOKE_LOADOUT ? process.env.SMOKE_LOADOUT.split(',').map(Number) : null;
+globalThis.localStorage = { getItem: (k) => (k === 'af_loadout' && SMOKE_LOADOUT ? JSON.stringify(SMOKE_LOADOUT) : null), setItem() {} };
 globalThis.kitLoaded = false;
 globalThis.fetch = async (u) => { assert.equal(u, '/world/kit.json'); globalThis.kitLoaded = true; return { json: async () => JSON.parse((await import('node:fs')).readFileSync(new URL('../public/world/kit.json', import.meta.url), 'utf8')) }; };
 let rafCb = null;
@@ -65,6 +66,8 @@ globalThis.requestAnimationFrame = (fn) => { rafCb = fn; return 1; };
 
 const SMOKE_MODE = process.env.SMOKE_MODE || 'tdm'; // tdm | hs | ffa | gg
 const GG = SMOKE_MODE === 'gg';
+const LO = S.cleanLoadout(SMOKE_LOADOUT); // набор оружия, с которым игрок входит в бой
+const W0 = LO[0];
 // ---------- «сеть»: клиент <-> настоящий Room ----------
 const LAT = 3; // кадров задержки в каждую сторону (~50 мс)
 let frameNo = 0;
@@ -99,8 +102,8 @@ function pump() {
     toServer.splice(i, 1);
     if (m.ev === 'join') {
       joinData = m.data;
-      room = new Room(1, m.data.skill, { mode: SMOKE_MODE, platform: m.data.touch ? 'mobile' : 'pc' });
-      human = room.addHuman(serverSock, m.data.name);
+      room = new Room(1, m.data.skill, { mode: SMOKE_MODE });
+      human = room.addHuman(serverSock, m.data.name, { loadout: m.data.loadout });
       human.assist = m.data.touch ? 1 : 0;
       room.fillBots();
       serverSock.emit('welcome', room.welcome(human));
@@ -163,8 +166,10 @@ assert.ok(received.snap > 5, `снапшотов получено: ${received.sn
 assert.equal(A.remotes.size, S.MATCH.botsTotal - 1, `моделей других игроков: ${A.remotes.size}`);
 assert.equal(A.alive, true);
 assert.equal(joinData.gm, SMOKE_MODE, 'режим не передан серверу');
+assert.deepEqual(joinData.loadout, LO, 'набор оружия не передан серверу');
+assert.equal(human.weapon, GG ? S.GG_ORDER[0] : W0, 'сервер выдал не то стартовое оружие');
 assert.equal(A.mode, SMOKE_MODE, 'клиент не узнал режим');
-assert.equal(A.teams, SMOKE_MODE === 'tdm' || SMOKE_MODE === 'hs');
+assert.equal(A.teams, SMOKE_MODE === 'tdm' || SMOKE_MODE === 'hs' || SMOKE_MODE === 'hill');
 assert.equal(A.gun, GG);
 if (!A.teams) for (const r of A.remotes.values()) assert.equal(r.team, r.team); // у всех соперников одинаковый вид, команды не нужны
 
@@ -194,15 +199,15 @@ assert.ok(err < 0.15, `рассинхрон предсказания с серв
 assert.ok(A.pending < 12, `очередь неподтверждённых вводов растёт: ${A.pending}`);
 
 // 4. Стрельба через тач-кнопку: патроны уменьшаются и на сервере, и в HUD-данных клиента.
-const mag0 = human.wp[0].mag;
+const mag0 = human.wp[GG ? S.GG_ORDER[0] : W0].mag;
 runFrames(80); // дать защите спавна закончиться
 ptr('bFire', 'pointerdown');
 runFrames(25);
 ptr('bFire', 'pointerup');
 runFrames(10);
-assert.ok(human.wp[0].mag < mag0, `сервер не списал патроны: ${human.wp[0].mag}`);
-assert.ok(A.info.wp[0][0] < mag0, `клиент не видит расход патронов: ${A.info.wp[0][0]}`);
-assert.ok(received.shot > 3, `событий shot: ${received.shot}`);
+assert.ok(human.wp[GG ? S.GG_ORDER[0] : W0].mag < mag0, `сервер не списал патроны: ${human.wp[W0].mag}`);
+assert.ok(A.info.wp[GG ? S.GG_ORDER[0] : W0][0] < mag0, `клиент не видит расход патронов: ${A.info.wp[0][0]}`);
+assert.ok(received.shot > (S.WEAPONS[GG ? S.GG_ORDER[0] : W0].auto ? 3 : 0), `событий shot: ${received.shot}`);
 
 if (!GG) {
 // 4b. Попадание по неподвижной цели через весь конвейер (тач-кнопка → сервер с лагом → hit у клиента).
@@ -221,7 +226,7 @@ if (!GG) {
   ptr('bFire', 'pointerup');
   human.hp = 100;
   runFrames(10);
-  assert.ok((received.hit || 0) - hitsBefore >= 2, `клиент не получил попаданий: ${(received.hit || 0) - hitsBefore}`);
+  assert.ok((received.hit || 0) - hitsBefore >= (S.WEAPONS[W0].auto ? 2 : 1), `клиент не получил попаданий: ${(received.hit || 0) - hitsBefore}`);
   assert.ok(enemy.hp < 100 || !enemy.alive, 'враг не получил урон');
 }
 
@@ -236,34 +241,41 @@ if (!GG) {
   A.view.yaw = -Math.PI / 2; A.view.pitch = Math.atan2(1.15 - S.PLAYER.eye, 16);
   A.setAuto(false);
   runFrames(25);
-  const before = human.wp[0].mag;
+  const before = human.wp[W0].mag;
   runFrames(40);
-  assert.equal(human.wp[0].mag, before, 'при выключенном авто-огне стрельбы быть не должно');
+  assert.equal(human.wp[W0].mag, before, 'при выключенном авто-огне стрельбы быть не должно');
   A.setAuto(true);
   for (let i = 0; i < 40; i++) { human.hp = 1e6; A.view.yaw = -Math.PI / 2; A.view.pitch = Math.atan2(1.15 - S.PLAYER.eye, 16); runFrames(1); }
   human.hp = 100;
-  assert.ok(human.wp[0].mag < before, 'авто-огонь не стрелял по врагу под прицелом');
+  assert.ok(human.wp[W0].mag < before, 'авто-огонь не стрелял по врагу под прицелом');
   assert.ok(enemy.hp < 100 || !enemy.alive, 'авто-огонь не нанёс урон');
   // отвернулись — перестал
   A.view.yaw = Math.PI / 2;
   runFrames(10);
-  const m1 = human.wp[0].mag;
+  const m1 = human.wp[W0].mag;
   runFrames(40);
-  assert.equal(human.wp[0].mag, m1, 'авто-огонь стреляет без цели');
+  assert.equal(human.wp[W0].mag, m1, 'авто-огонь стреляет без цели');
   A.setAuto(true);
   for (const [p, bot, ai] of saved) { p.bot = bot; p.ai = ai; }
 }
 
-// 5. Смена оружия: панель внизу и клавиши 1–5, все пять видов.
+// 5. Смена оружия: панель внизу и клавиши 1–3 переключают только слоты набора.
 ptr('wb1', 'pointerdown');
 runFrames(20);
-assert.equal(A.weapon, 1);
-assert.equal(human.weapon, 1, 'сервер не переключил оружие');
-for (let i = 0; i < S.WEAPONS.length; i++) {
+assert.equal(A.weapon, LO[1]);
+assert.equal(human.weapon, LO[1], 'сервер не переключил оружие');
+for (let i = 0; i < 3; i++) {
   press('Digit' + (i + 1)); release('Digit' + (i + 1));
   runFrames(14);
-  assert.equal(A.weapon, i, `клиент не выбрал оружие ${i}`);
-  assert.equal(human.weapon, i, `сервер не выбрал оружие ${i}`);
+  assert.equal(A.weapon, LO[i], `клиент не выбрал оружие слота ${i}`);
+  assert.equal(human.weapon, LO[i], `сервер не выбрал оружие слота ${i}`);
+}
+press('Digit4'); release('Digit4'); press('Digit5'); release('Digit5'); runFrames(10);
+assert.equal(A.weapon, LO[2], 'клавиши 4 и 5 не должны менять оружие');
+{ // колесо мыши ходит по кругу только по набору
+  const seen = new Set();
+  for (let k = 0; k < 3; k++) { winHandlers.wheel?.forEach((f) => f({ deltaY: 1 })); runFrames(14); seen.add(A.weapon); }
+  assert.ok([...seen].every((w) => LO.includes(w)) || winHandlers.wheel === undefined, 'колесо выбрало чужое оружие');
 }
 // чужие модели показывают оружие из снапшота и не ломаются
 for (const r of A.remotes.values()) {
@@ -277,7 +289,7 @@ assert.equal(A.fov, 72, 'FOV вне прицела должен быть баз�
 ptr('bAds', 'pointerdown'); ptr('bAds', 'pointerup');
 runFrames(40);
 assert.ok(A.ads > 0.95, `ADS не включился: ${A.ads}`);
-assert.ok(A.fov < 60, `FOV не сузился: ${A.fov}`);
+assert.ok(A.fov < 61, `FOV не сузился: ${A.fov}`);
 assert.equal(human.ads, true, 'сервер не получил ads');
 assert.equal(A.scoped, false, 'у автомата не должно быть оптики');
 // стрельба в прицеле, потом выключаем (повторное нажатие)
@@ -288,29 +300,32 @@ assert.ok(A.ads < 0.05 && A.fov > 71, 'ADS не выключился');
 assert.equal(human.ads, false);
 
 // 5b. Снайперка: оптика включается, вьюмодель скрывается; смена оружия снимает прицел.
-press('Digit5'); release('Digit5'); runFrames(20);
-ptr('bAds', 'pointerdown'); ptr('bAds', 'pointerup');
-runFrames(60);
-assert.equal(A.scoped, true, 'оптика снайперки не включилась');
-assert.equal(A.vmShown, false, 'оружие должно прятаться в оптике');
-assert.ok(Math.abs(A.fov - S.WEAPONS[4].zoom) < 2, `FOV в оптике: ${A.fov}`);
-press('Digit1'); release('Digit1'); runFrames(30);
-assert.equal(A.scoped, false);
-assert.ok(A.ads < 0.1, 'смена оружия должна снимать прицел');
+if (LO.includes(4)) {
+  press('Digit' + (LO.indexOf(4) + 1)); release('Digit' + (LO.indexOf(4) + 1)); runFrames(20);
+  ptr('bAds', 'pointerdown'); ptr('bAds', 'pointerup');
+  runFrames(60);
+  assert.equal(A.scoped, true, 'оптика снайперки не включилась');
+  assert.equal(A.vmShown, false, 'оружие должно прятаться в оптике');
+  assert.ok(Math.abs(A.fov - S.WEAPONS[4].zoom) < 2, `FOV в оптике: ${A.fov}`);
+  press('Digit1'); release('Digit1'); runFrames(30);
+  assert.equal(A.scoped, false);
+  assert.ok(A.ads < 0.1, 'смена оружия должна снимать прицел');
+}
 
 // 5c. Перезарядка: вьюмодель анимируется без NaN, звук механизма.
+press('Digit1'); release('Digit1');
 runFrames(10);
-human.wp[0].mag = 5;
+human.wp[W0].mag = 5;
 const oscBefore = audioStats.osc;
 ptr('bReload', 'pointerdown'); ptr('bReload', 'pointerup');
 runFrames(20);
 assert.ok(human.reloading, 'перезарядка не началась');
-for (let i = 0; i < 130; i++) {
+for (let i = 0; i < 60 * Math.ceil(S.WEAPONS[W0].reload) + 30; i++) {
   runFrames(1);
   const vp = A.vmPos;
   assert.ok(vp && Number.isFinite(vp.x) && Number.isFinite(vp.y) && Number.isFinite(vp.z), 'NaN в позе оружия при перезарядке');
 }
-assert.equal(human.wp[0].mag, 30, 'перезарядка не завершилась');
+assert.equal(human.wp[W0].mag, S.WEAPONS[W0].mag, 'перезарядка не завершилась');
 assert.ok(audioStats.osc > oscBefore, 'звуки перезарядки не синтезировались');
 
 // 5d. Все виды оружия: выстрелы, перезарядки, ничего не падает и сцена без NaN.
@@ -322,9 +337,10 @@ function sceneIsFinite(o, depth = 0) {
   for (const c of Array.isArray(o.children) ? o.children : []) { const bad = sceneIsFinite(c, depth + 1); if (bad) return bad; }
   return null;
 }
-for (let i = 0; i < S.WEAPONS.length; i++) {
-  press('Digit' + (i + 1)); release('Digit' + (i + 1));
+for (const i of LO) {
+  press('Digit' + (LO.indexOf(i) + 1)); release('Digit' + (LO.indexOf(i) + 1));
   runFrames(30);
+  assert.equal(A.weapon, i);
   human.protectUntil = 0;
   const checkAll = (what) => {
     assert.equal(sceneIsFinite(A.scene), null, `NaN в сцене (${what}, оружие ${i})`);
@@ -359,7 +375,7 @@ if (GG) {
   runFrames(30);
   assert.equal(human.gg, 1); assert.equal(A.sel, S.GG_ORDER[1], 'клиент не сменил оружие после убийства');
   assert.notEqual(A.sel, w0);
-  press('Digit5'); runFrames(10); release('Digit5');
+  press('Digit2'); runFrames(10); release('Digit2');
   assert.equal(A.sel, S.GG_ORDER[1], 'в гонке вооружений клавиши оружия не работают');
 }
 

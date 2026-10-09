@@ -27,8 +27,12 @@ await store.joinClan((await store.userByNick('Shadow')).id, cid, 30);
 
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.webmanifest': 'application/json', '.json': 'application/json' };
 const PAGES = { '/': 'index.html', '/login': 'auth.html', '/register': 'auth.html', '/lobby': 'lobby.html', '/play': 'play.html', '/shop': 'shop.html', '/clans': 'clans.html', '/leaders': 'leaders.html', '/profile': 'profile.html', '/settings': 'settings.html' };
+const MOCK = process.env.PLAY_MOCK === '1'; // предпросмотр боя: заглушка three и «сокет» поверх настоящего Room
 http.createServer((req, res) => {
   const url = req.url.split('?')[0];
+  if (MOCK && url === '/vendor/three/three.module.js') { res.writeHead(200, { 'Content-Type': 'text/javascript' }); return res.end(fs.readFileSync(path.join(root, '../test/stub-three.mjs'))); }
+  if (MOCK && url === '/__room.js') { res.writeHead(200, { 'Content-Type': 'text/javascript' }); return res.end(fs.readFileSync(path.join(root, '../game.js'), 'utf8').replace("'./public/shared.js'", "'/shared.js'")); }
+  if (MOCK && url === '/socket.io/socket.io.js') { res.writeHead(200, { 'Content-Type': 'text/javascript' }); return res.end(fs.readFileSync(path.join(root, '../test/preview/mock-io.js'))); }
   if (url.startsWith('/api/')) {
     let raw = '';
     req.on('data', (c) => { raw += c; });

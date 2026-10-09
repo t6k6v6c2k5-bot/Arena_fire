@@ -37,15 +37,109 @@ function rivets(p, n, x0, y, z0, dz, col = K.dsteel, sx = 0.032, size = 0.006) {
 // кольцо (рифление) вокруг ствола/трубки вдоль Z
 function ring(p, r, z, col, y = 0, x = 0, len = 0.006) { p.tz(r, r, len, col, x, y, z, { seg: 12 }); }
 
+// Новые модели: пока это доработанные версии базовых (до прихода авторских моделей оружия).
+const VARIANT_BASE = { 5: 0, 6: 0, 7: 1, 8: 4, 9: 2 };
+const VARIANTS = {
+  5(g, ud) { // карабин: чёрный пластик вместо дерева, коллиматор
+    g.children[3].visible = false;
+    g.add(mk('gunv5', () => {
+      const p = P();
+      p.box(0.07, 0.05, 0.2, K.poly, 0, -0.012, -0.31);                    // цевьё
+      p.box(0.06, 0.012, 0.18, K.dsteel, 0, 0.034, -0.31);
+      for (let i = 0; i < 5; i++) p.box(0.072, 0.004, 0.008, K.black, 0, -0.012, -0.38 + i * 0.04);
+      p.box(0.046, 0.1, 0.054, K.poly, 0, -0.098, 0.14, 0.32);             // рукоять
+      p.box(0.052, 0.09, 0.2, K.poly, 0, -0.012, 0.31, 0.04);              // приклад
+      p.box(0.054, 0.1, 0.014, K.rubber, 0, -0.02, 0.42, 0.04);
+      p.box(0.034, 0.012, 0.16, K.dsteel, 0, 0.09, -0.02);                 // рельса
+      p.box(0.04, 0.03, 0.08, K.black, 0, 0.115, -0.05);                   // коллиматор
+      p.box(0.03, 0.03, 0.004, K.lens, 0, 0.125, -0.092);
+      p.box(0.004, 0.004, 0.004, 0xff3030, 0, 0.125, -0.088);
+      p.box(0.04, 0.03, 0.05, K.black, 0, 0.1, -0.05);
+      return p;
+    }, false));
+    ud.sightY = 0.125; ud.flashSize = 0.9;
+  },
+  6(g, ud, mag) { // пулемёт: барабан и сошки
+    mag.children[0].visible = false;
+    mag.add(mk('gunv6m', () => {
+      const p = P();
+      p.tz(0.075, 0.075, 0.1, K.poly, 0, -0.11, 0.0, { seg: 16 });
+      p.tz(0.078, 0.078, 0.012, K.black, 0, -0.11, 0.058, { seg: 16 });
+      p.tz(0.078, 0.078, 0.012, K.black, 0, -0.11, -0.058, { seg: 16 });
+      p.box(0.04, 0.05, 0.07, K.poly, 0, -0.045, 0.0);
+      for (let i = 0; i < 6; i++) p.box(0.012, 0.006, 0.104, K.dsteel, Math.sin(i) * 0.06, -0.11 + Math.cos(i) * 0.06, 0);
+      return p;
+    }, false));
+    g.add(mk('gunv6', () => {
+      const p = P();
+      p.tz(0.022, 0.022, 0.18, K.black, 0, 0.012, -0.62, { seg: 12 });     // кожух ствола
+      for (let i = 0; i < 5; i++) p.box(0.03, 0.006, 0.01, K.dsteel, 0, 0.034, -0.55 - i * 0.034);
+      p.tz(0.006, 0.006, 0.2, K.steel, 0.025, -0.045, -0.5, { seg: 6 });   // сошки
+      p.tz(0.006, 0.006, 0.2, K.steel, -0.025, -0.045, -0.5, { seg: 6 });
+      p.box(0.07, 0.022, 0.05, K.olive, 0, 0.06, 0.02);                    // ручка для переноски
+      return p;
+    }, false));
+    ud.magDrop = [0, -0.22, 0.0]; ud.flashSize = 1.15;
+  },
+  7(g, ud, mag, mover) { // револьвер: барабан и длинный ствол
+    for (const c of mover.children) c.visible = false;
+    mag.visible = false;
+    g.add(mk('gunv7', () => {
+      const p = P();
+      p.tz(0.034, 0.034, 0.075, K.steel, 0, 0.012, 0.0, { seg: 10 });      // барабан
+      for (let i = 0; i < 6; i++) p.tz(0.007, 0.007, 0.078, K.black, Math.cos(i * 1.047) * 0.022, 0.012 + Math.sin(i * 1.047) * 0.022, 0.0, { seg: 6 });
+      p.tz(0.014, 0.014, 0.24, K.dsteel, 0, 0.036, -0.17, { seg: 10 });    // ствол
+      p.box(0.022, 0.026, 0.24, K.steel, 0, 0.014, -0.17);                 // подствольный кожух
+      p.box(0.012, 0.012, 0.01, K.white, 0, 0.056, -0.28);                 // мушка
+      p.box(0.016, 0.014, 0.028, K.black, 0, 0.062, 0.07);                 // целик
+      p.box(0.016, 0.03, 0.012, K.steel, 0, 0.036, 0.098, 0.4);            // курок
+      p.box(0.038, 0.04, 0.08, K.steel, 0, 0.02, 0.07);                    // рамка
+      return p;
+    }, true));
+    ud.muzzle = [0, 0.036, -0.3]; ud.type = 'bolt'; ud.travel = 0.02; ud.flashSize = 1.0;
+  },
+  8(g, ud, mag) { // марксманка: глушитель, магазин покрупнее, полуавтомат
+    g.add(mk('gunv8', () => {
+      const p = P();
+      p.tz(0.024, 0.024, 0.16, K.black, 0, 0.014, -1.04, { seg: 12 });
+      for (let i = 0; i < 4; i++) p.tz(0.027, 0.027, 0.01, K.dsteel, 0, 0.014, -0.98 - i * 0.04, { seg: 12 });
+      p.box(0.05, 0.02, 0.3, K.tan, 0, 0.04, 0.3, 0.04);                   // накладка приклада
+      return p;
+    }, false));
+    mag.add(mk('gunv8m', () => P().box(0.044, 0.13, 0.07, K.gun, 0, -0.12, 0.02).box(0.048, 0.012, 0.074, K.black, 0, -0.19, 0.02), false));
+    ud.muzzle = [0, 0.014, -1.12]; ud.type = 'mag'; ud.travel = 0.04; ud.flashSize = 0.9;
+  },
+  9(g, ud, mag, mover) { // боевой дробовик: магазин-коробка, без помпы
+    for (const c of mover.children) c.visible = false;
+    mag.children[0].visible = false;
+    g.add(mk('gunv9', () => {
+      const p = P();
+      p.box(0.07, 0.06, 0.22, K.poly, 0, -0.04, -0.34);                    // пластиковое цевьё
+      for (let i = 0; i < 6; i++) p.box(0.072, 0.004, 0.006, K.black, 0, -0.012, -0.42 + i * 0.03);
+      p.box(0.016, 0.016, 0.2, K.dsteel, 0, 0.06, -0.3);                   // рельса
+      return p;
+    }, false));
+    mag.add(mk('gunv9m', () => {
+      const p = P();
+      p.box(0.06, 0.15, 0.1, K.poly, 0, -0.12, 0.04);
+      p.box(0.064, 0.012, 0.104, K.black, 0, -0.2, 0.04);
+      for (let i = 0; i < 4; i++) p.box(0.064, 0.006, 0.104, K.black, 0, -0.07 - i * 0.03, 0.04);
+      return p;
+    }, false));
+    ud.type = 'mag'; ud.pumpHand = false; ud.travel = 0.05; ud.magDrop = [0, -0.22, 0.04]; ud.magHold = [0, -0.1, 0.04];
+  },
+};
+
 // Возвращает Group; userData: mag, mover, muzzle, eject, grip, fore, hold, magDrop, magHold, type, sightY, adsZ, travel, flash
 export function buildGun(index) {
   const g = new THREE.Group();
   const ud = g.userData;
   const mag = new THREE.Group(), mover = new THREE.Group();
   g.add(mag, mover);
-  const k = `gun${index}`;
+  const base = VARIANT_BASE[index] ?? index; // новые стволы собраны на основе базовых моделей с доработками
+  const k = `gun${base}`;
 
-  if (index === 0) { // автомат (АК-образный)
+  if (base === 0) { // автомат (АК-образный)
     g.add(mk(k + 'm', () => {
       const p = P();
       p.box(0.062, 0.078, 0.38, K.gun, 0, 0, 0.02);                         // ствольная коробка
@@ -110,7 +204,7 @@ export function buildGun(index) {
     ud.muzzle = [0, 0.012, -0.8]; ud.eject = [0.04, 0.03, -0.02];
     ud.grip = [0, -0.12, 0.13]; ud.fore = [0, -0.05, -0.32]; ud.hold = [0.12, -0.16, -0.16];
     ud.magDrop = [0, -0.2, 0.0]; ud.magHold = [0, -0.1, -0.03]; ud.type = 'mag'; ud.sightY = 0.084; ud.adsZ = -0.34; ud.travel = 0.05; ud.flashSize = 1;
-  } else if (index === 1) { // пистолет
+  } else if (base === 1) { // пистолет
     g.add(mk(k + 'f', () => {
       const p = P();
       p.box(0.038, 0.032, 0.185, K.poly, 0, 0.006, -0.02);                  // рамка
@@ -147,7 +241,7 @@ export function buildGun(index) {
     ud.muzzle = [0, 0.044, -0.16]; ud.eject = [0.03, 0.06, -0.02];
     ud.grip = [0, -0.085, 0.08]; ud.fore = [-0.025, -0.1, 0.06]; ud.hold = [0.04, -0.1, -0.34];
     ud.magDrop = [0, -0.22, 0.04]; ud.magHold = [0, -0.09, 0.08]; ud.type = 'mag'; ud.sightY = 0.08; ud.adsZ = -0.3; ud.travel = 0.07; ud.flashSize = 0.7;
-  } else if (index === 2) { // дробовик (помповый)
+  } else if (base === 2) { // дробовик (помповый)
     g.add(mk(k + 'm', () => {
       const p = P();
       p.box(0.064, 0.088, 0.27, K.gun, 0, 0, 0.05);                         // ствольная коробка
@@ -198,7 +292,7 @@ export function buildGun(index) {
     ud.muzzle = [0, 0.03, -0.8]; ud.eject = [0.04, 0.02, 0.0];
     ud.grip = [0, -0.11, 0.12]; ud.fore = [0, -0.075, -0.34]; ud.hold = [0.12, -0.17, -0.13];
     ud.magDrop = [0, -0.05, 0.04]; ud.magHold = [0.02, -0.07, 0.08]; ud.type = 'shell'; ud.sightY = 0.07; ud.adsZ = -0.3; ud.travel = 0.13; ud.pumpHand = true; ud.flashSize = 1.5;
-  } else if (index === 3) { // пистолет-пулемёт
+  } else if (base === 3) { // пистолет-пулемёт
     g.add(mk(k + 'm', () => {
       const p = P();
       p.box(0.056, 0.074, 0.3, K.gun, 0, 0, 0);                             // коробка
@@ -309,6 +403,7 @@ export function buildGun(index) {
     ud.magDrop = [0, -0.18, 0.0]; ud.magHold = [0, -0.07, 0.0]; ud.type = 'bolt'; ud.sightY = 0.1; ud.adsZ = -0.22; ud.travel = 0.09; ud.flashSize = 1.7;
   }
   ud.mag = mag; ud.mover = mover;
+  if (VARIANTS[index]) VARIANTS[index](g, ud, mag, mover);
   ud.flash = makeFlash(ud.flashSize || 1);
   ud.flash.position.set(ud.muzzle[0], ud.muzzle[1], ud.muzzle[2]);
   g.add(ud.flash);

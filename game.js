@@ -45,6 +45,7 @@ class Player {
     this.onGround = true;
     this.yaw = 0; this.pitch = 0;
     this.weapon = 0;
+    this.loadout = S.DEFAULT_LOADOUT.slice(); // выбранный набор: основное, тяжёлое, пистолет
     this.wp = null;
     this.nextFire = 0;
     this.reloading = false;
@@ -82,6 +83,7 @@ class Room {
     this.skill = BOT_SKILL[this.skillIdx];
     this.mode = S.MODES[opts.mode] || S.MODES.tdm;
     this.winId = 0;
+    this.hill = { idx: 0, t: S.HILL_TIME, owner: -1, acc: [0, 0] }; // «Захват точки»
     this.players = new Map();
     this.t = 0;
     this.state = 0; // 0 — бой, 1 — итоги
@@ -106,6 +108,8 @@ class Room {
   addBot() {
     const name = BOT_NAMES[this.botIdx++ % BOT_NAMES.length];
     const b = new Player(name, this.smallerTeam(), true);
+    const prim = [0, 3, 5, 6, 8];
+    b.loadout = [prim[Math.floor(Math.random() * prim.length)], 2, 1];
     this.players.set(b.id, b);
     this.spawn(b);
     this.rosterDirty = true;
@@ -114,6 +118,7 @@ class Room {
   addHuman(sock, name, extra = {}) {
     const p = new Player(name, this.smallerTeam(), false, sock);
     p.uid = extra.uid || null; p.equip = extra.equip || null; p.tag = extra.tag || ''; p.level = extra.level || 0;
+    p.loadout = S.cleanLoadout(extra.loadout);
     p.joinT = this.t;
     this.players.set(p.id, p);
     this.spawn(p);
@@ -180,7 +185,7 @@ class Room {
     p.onGround = true;
     p.hp = p.bot ? this.skill.hp : 100;
     p.alive = true;
-    p.weapon = this.mode.gun ? S.GG_ORDER[p.gg] : 0;
+    p.weapon = this.mode.gun ? S.GG_ORDER[p.gg] : p.loadout[0];
     p.wp = S.WEAPONS.map((w) => ({ mag: w.mag, res: p.bot ? 9999 : w.reserve }));
     p.reloading = false;
     p.nextFire = this.t + 0.4;
@@ -325,7 +330,8 @@ class Room {
     att.kills++;
     if (head) att.hs++;
     this.emit('kill', { k: att.id, v: vic.id, w: att.weapon, hs: head ? 1 : 0, d: Math.round(dist), z: zone });
-    if (this.mode.team) {
+    if (this.mode.hill) { /* очки даёт только удержание зоны */ }
+    else if (this.mode.team) {
       this.scores[att.team]++;
       if (this.scores[att.team] >= this.mode.killLimit) this.endMatch();
     } else if (this.mode.gun) {
@@ -362,6 +368,7 @@ class Room {
     this.endT = this.mode.time;
     this.winner = -1;
     this.winId = 0;
+    this.hill = { idx: 0, t: S.HILL_TIME, owner: -1, acc: [0, 0] };
     for (const p of this.players.values()) { p.kills = 0; p.deaths = 0; p.hs = 0; p.gg = 0; p.reported = false; p.joinT = this.t; this.spawn(p); }
     this.emit('start', {});
   }
@@ -373,7 +380,7 @@ class Room {
 
   welcome(p) {
     return {
-      id: p.id, team: p.team, room: this.id, roomName: this.name, code: this.code, tick: S.TICK, mode: this.mode.id, modeName: this.mode.name, teams: this.mode.team ? 1 : 0, lim: this.mode.killLimit, ggN: S.GG_ORDER.length, skill: this.skillIdx, skillName: this.skill.name,
+      id: p.id, team: p.team, room: this.id, roomName: this.name, code: this.code, tick: S.TICK, mode: this.mode.id, modeName: this.mode.name, teams: this.mode.team ? 1 : 0, lim: this.mode.killLimit, hill: this.mode.hill ? 1 : 0, ggN: S.GG_ORDER.length, skill: this.skillIdx, skillName: this.skill.name,
       players: [...this.players.values()].map((o) => (this.rosterEntry(o))),
     };
   }
@@ -405,7 +412,7 @@ class Room {
     S.stepPlayer(p, inp);
 
     const wi = inp.weapon;
-    if (!this.mode.gun && Number.isInteger(wi) && wi >= 0 && wi < S.WEAPONS.length && wi !== p.weapon) {
+    if (!this.mode.gun && Number.isInteger(wi) && p.loadout.includes(wi) && wi !== p.weapon) {
       p.weapon = wi;
       p.reloading = false;
       p.nextFire = Math.max(p.nextFire, this.t + 0.35);
@@ -449,9 +456,10 @@ class Room {
       cands.push(w);
     }
     const list = cands.length ? cands : S.WAYPOINTS;
-    if (Math.random() < 0.55) {
-      const hx = Math.random() < 0.5 ? 0 : (b.team === 0 ? 24 : -24);
-      const hz = (Math.random() - 0.5) * 20;
+    if (Math.random() < (this.mode.hill ? 0.8 : 0.55)) {
+      let hx = Math.random() < 0.5 ? 0 : (b.team === 0 ? 24 : -24);
+      let hz = (Math.random() - 0.5) * 20;
+      if (this.mode.hill && Math.random() < 0.85) { const h = S.HILLS[this.hill.idx]; hx = h.x + (Math.random() - 0.5) * h.r; hz = h.z + (Math.random() - 0.5) * h.r; }
       let best = list[0], bd = 1e9;
       for (const w of list) {
         const d = Math.hypot(w[0] - hx, w[1] - hz);
@@ -543,7 +551,7 @@ class Room {
     const yaw = S.wrapAngle(b.yaw + clamp(S.angDiff(wantYaw, b.yaw), -maxTurn, maxTurn));
     const pitch = b.pitch + clamp(wantPitch - b.pitch, -3 * dt, 3 * dt);
 
-    this.applyInput(b, { mx, mz, yaw, pitch, jump, fire, reload, weapon: 0, rt: Date.now() });
+    this.applyInput(b, { mx, mz, yaw, pitch, jump, fire, reload, weapon: b.weapon, rt: Date.now() });
   }
 
   // ----- Тик -----
@@ -553,6 +561,7 @@ class Room {
 
     if (this.state === 0) {
       this.endT -= S.DT;
+      if (this.mode.hill) this.hillTick();
       if (this.endT <= 0) this.endMatch();
     } else {
       this.overT -= S.DT;
@@ -588,6 +597,25 @@ class Room {
     this.sendSnapshots(now);
   }
 
+  // «Захват точки»: считаем живых внутри зоны. Одна команда в зоне — ей идёт секунда за секундой, обе — зона спорная.
+  hillTick() {
+    const hs = this.hill;
+    hs.t -= S.DT;
+    if (hs.t <= 0) { hs.idx = (hs.idx + 1) % S.HILLS.length; hs.t = S.HILL_TIME; hs.acc = [0, 0]; }
+    const h = S.HILLS[hs.idx];
+    const n = [0, 0];
+    for (const p of this.players.values()) if (p.alive && Math.hypot(p.x - h.x, p.z - h.z) <= h.r) n[p.team]++;
+    hs.owner = n[0] && n[1] ? 2 : n[0] ? 0 : n[1] ? 1 : -1;
+    if (hs.owner === 0 || hs.owner === 1) {
+      hs.acc[hs.owner] += S.DT;
+      if (hs.acc[hs.owner] >= 1) {
+        hs.acc[hs.owner] -= 1;
+        this.scores[hs.owner]++;
+        if (this.scores[hs.owner] >= this.mode.killLimit) this.endMatch();
+      }
+    }
+  }
+
   sendSnapshots(now) {
     const list = [];
     for (const p of this.players.values()) {
@@ -597,6 +625,7 @@ class Room {
       t: now, st: this.state, rem: Math.max(0, Math.ceil(this.state === 0 ? this.endT : this.overT)),
       sc: this.scores, win: this.winner, wid: this.winId, p: list,
     };
+    if (this.mode.hill) { const h = S.HILLS[this.hill.idx]; base.hl = [h.x, h.z, h.r, this.hill.owner, Math.max(0, Math.ceil(this.hill.t))]; }
     for (const p of this.players.values()) {
       if (!p.sock) continue;
       p.sock.volatile.emit('snap', {
@@ -609,7 +638,7 @@ class Room {
           rl: p.reloading ? Math.max(0, r2(p.reloadEnd - this.t)) : 0,
           resp: p.alive ? 0 : Math.max(0, Math.ceil(p.respawnAt - this.t)),
           prot: this.t < p.protectUntil ? 1 : 0,
-          bl: r3(p.bloom), ads: p.ads ? 1 : 0, gg: p.gg,
+          bl: r3(p.bloom), ads: p.ads ? 1 : 0, gg: p.gg, lo: p.loadout,
         },
       });
     }

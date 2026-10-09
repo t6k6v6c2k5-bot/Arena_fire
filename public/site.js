@@ -57,9 +57,10 @@ export const ICON = {
   ffa: SVG('<path d="M12 3l2.5 6 6.5.5-5 4.3 1.6 6.4L12 16.8 6.4 20.2 8 13.8 3 9.5 9.5 9z"/>'),
   gun: SVG('<path d="M3 10h13l2 2h3v3h-6l-1 3H8l1-3H3z"/><path d="M6 10V8h8v2"/>'),
 };
-export const MODE_ICON = { tdm: ICON.team, hs: ICON.head, ffa: ICON.ffa, gg: ICON.gun };
+ICON.flag = SVG('<path d="M6 21V3M6 4h12l-2.5 4.5L18 13H6"/>');
+export const MODE_ICON = { tdm: ICON.team, hill: ICON.flag, hs: ICON.head, ffa: ICON.ffa, gg: ICON.gun };
 
-const NAV = [['/lobby', 'Играть', 'play'], ['/leaders', 'Рейтинг', 'rank'], ['/clans', 'Кланы', 'clan'], ['/shop', 'Магазин', 'shop']];
+const NAV = [['/play', 'Играть', 'play'], ['/lobby', 'Лобби', 'team'], ['/leaders', 'Рейтинг', 'rank'], ['/clans', 'Кланы', 'clan'], ['/shop', 'Магазин', 'shop']];
 
 // Рисует шапку, нижнюю панель (на телефоне) и подвал; возвращает данные пользователя (или null).
 export async function boot(active, { need = false } = {}) {
@@ -76,17 +77,17 @@ export async function boot(active, { need = false } = {}) {
   document.body.prepend(top);
   const tab = document.createElement('nav');
   tab.className = 'tabbar';
-  const items = [['/leaders', 'Рейтинг', 'rank'], ['/clans', 'Кланы', 'clan'], ['/lobby', 'Играть', 'play'], ['/shop', 'Магазин', 'shop'], [u ? '/profile' : '/login', u ? 'Профиль' : 'Войти', 'user']];
+  const items = [['/leaders', 'Рейтинг', 'rank'], ['/clans', 'Кланы', 'clan'], ['/play', 'Играть', 'play'], ['/shop', 'Магазин', 'shop'], [u ? '/profile' : '/login', u ? 'Профиль' : 'Войти', 'user']];
   tab.innerHTML = items.map(([h, t, i]) => (i === 'play'
     ? `<a class="play ${active === h ? 'on' : ''}" href="${h}"><span>${ICON.play}</span><small>${t}</small></a>`
     : `<a href="${h}" class="${active === h || (h === '/profile' && active === '/profile') ? 'on' : ''}">${ICON[i]}${t}</a>`)).join('');
   document.body.appendChild(tab);
   const f = document.createElement('footer');
-  f.innerHTML = `<div class="wrap"><span>Arena Fire · шутер 4×4 в браузере · арена по мотивам набора Kenney</span><span><a href="/lobby">Играть</a> · <a href="/leaders">Рейтинг</a> · <a href="/clans">Кланы</a>
+  f.innerHTML = `<div class="wrap"><span>Arena Fire · шутер 4×4 в браузере · арена по мотивам набора Kenney</span><span><a href="/play">Играть</a> · <a href="/lobby">Лобби</a> · <a href="/leaders">Рейтинг</a> · <a href="/clans">Кланы</a>
  · <a href="/settings">Настройки</a></span></div>`;
   document.body.appendChild(f);
   api('/stats').then((s) => { if (s.degraded) { const b = document.createElement('div'); b.className = 'banner wrap'; b.style.marginTop = '12px'; b.textContent = 'База данных недоступна — прогресс временно не сохраняется.'; top.after(b); } }).catch(() => {});
   return u;
 }
 
-export const nextUrl = () => { const n = new URLSearchParams(location.search).get('next'); return n && n.startsWith('/') && !n.startsWith('//') ? n : '/lobby'; };
+export const nextUrl = () => { const n = new URLSearchParams(location.search).get('next'); return n && n.startsWith('/') && !n.startsWith('//') ? n : '/play'; };

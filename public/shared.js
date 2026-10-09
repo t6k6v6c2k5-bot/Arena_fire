@@ -21,10 +21,15 @@ export const MODES = {
   tdm: { id: 'tdm', name: 'Командный бой', short: 'Команды', team: true, killLimit: 40, time: 300, desc: 'Две команды по четыре бойца. Первые до 40 убийств или лидер через 5 минут.' },
   hs:  { id: 'hs', name: 'Только хедшоты', short: 'Хедшоты', team: true, killLimit: 30, time: 300, desc: 'Командный бой, где выстрел в голову убивает сразу, а по телу урон почти не проходит.' },
   ffa: { id: 'ffa', name: 'Каждый за себя', short: 'Все против всех', team: false, killLimit: 20, time: 300, desc: 'Каждый сам за себя. Первый набравший 20 убийств побеждает.' },
-  gg:  { id: 'gg', name: 'Гонка вооружений', short: 'Гонка', team: false, gun: true, killLimit: 0, time: 420, desc: 'Каждое убийство даёт следующее оружие. Кто первый пройдёт все пять, тот победил.' },
+  gg:  { id: 'gg', name: 'Гонка вооружений', short: 'Гонка', team: false, gun: true, killLimit: 0, time: 480, desc: 'Каждое убийство даёт следующее оружие. Кто первым пройдёт все восемь, тот победил.' },
+  hill: { id: 'hill', name: 'Захват точки', short: 'Точка', team: true, hill: true, killLimit: 100, time: 360, desc: 'На карте появляется зона. Пока в ней только ваши, команде идут очки. Зона каждые 40 секунд переезжает.' },
 };
 export const MODE_IDS = Object.keys(MODES);
-export const GG_ORDER = [0, 3, 2, 4, 1]; // автомат → ПП → дробовик → снайперка → пистолет
+export const GG_ORDER = [6, 0, 3, 9, 8, 4, 7, 1]; // пулемёт → автомат → ПП → боевой дробовик → марксманка → снайперка → револьвер → пистолет
+
+// «Захват точки»: зона по очереди переезжает. Центр, север и юг равноудалены от обеих баз.
+export const HILLS = [{ x: 0, z: 0, r: 6 }, { x: 0, z: -17, r: 5 }, { x: 0, z: 0, r: 6 }, { x: 0, z: 17, r: 5 }];
+export const HILL_TIME = 40; // секунд на одной позиции
 
 export const TEAM_NAMES = ['СИНИЕ', 'КРАСНЫЕ'];
 
@@ -37,7 +42,24 @@ export const WEAPONS = [
   { id: 'shotgun', name: 'Дробовик',  short: 'ДР', dmg: 11, rate: 0.85,  mag: 6,  reserve: 30,  reload: 2.6, spread: 0.075, bloom: 0,      bloomMax: 0,     adsMul: 0.75, pellets: 8, auto: false, head: 1.5, range: 40,  fall: [7, 18, 0.25],  zoom: 64, kick: [0.0500, 0.0080] },
   { id: 'smg',     name: 'ПП',        short: 'ПП', dmg: 17, rate: 0.065, mag: 35, reserve: 140, reload: 1.8, spread: 0.020, bloom: 0.003,  bloomMax: 0.035, adsMul: 0.50, pellets: 1, auto: true,  head: 1.8, range: 90,  fall: [14, 40, 0.5],  zoom: 58, kick: [0.0035, 0.0025] },
   { id: 'sniper',  name: 'Снайперка', short: 'СН', dmg: 90, rate: 1.3,   mag: 5,  reserve: 25,  reload: 2.8, spread: 0.050, bloom: 0,      bloomMax: 0,     adsMul: 0.03, pellets: 1, auto: false, head: 2.5, range: 300, fall: null,           zoom: 20, kick: [0.0300, 0.0040] },
+  { id: 'carbine', name: 'Карабин',   short: 'КР', dmg: 22, rate: 0.085, mag: 30, reserve: 150, reload: 1.8, spread: 0.012, bloom: 0.0025, bloomMax: 0.022, adsMul: 0.45, pellets: 1, auto: true,  head: 1.9, range: 130, fall: [26, 80, 0.6], zoom: 56, kick: [0.0038, 0.0014] },
+  { id: 'lmg',     name: 'Пулемёт',   short: 'ПУ', dmg: 24, rate: 0.075, mag: 100, reserve: 200, reload: 4.2, spread: 0.022, bloom: 0.0045, bloomMax: 0.05,  adsMul: 0.60, pellets: 1, auto: true,  head: 1.8, range: 140, fall: [28, 80, 0.6], zoom: 60, kick: [0.0065, 0.0035] },
+  { id: 'revolver', name: 'Револьвер', short: 'РВ', dmg: 62, rate: 0.62,  mag: 6,  reserve: 36,  reload: 2.4, spread: 0.004, bloom: 0.012,  bloomMax: 0.04,  adsMul: 0.50, pellets: 1, auto: false, head: 2.2, range: 120, fall: [25, 60, 0.6], zoom: 60, kick: [0.0300, 0.0070] },
+  { id: 'dmr',     name: 'Марксманка', short: 'МС', dmg: 48, rate: 0.38,  mag: 10, reserve: 50,  reload: 2.4, spread: 0.008, bloom: 0.010,  bloomMax: 0.03,  adsMul: 0.25, pellets: 1, auto: false, head: 2.1, range: 220, fall: [60, 150, 0.7], zoom: 36, kick: [0.0200, 0.0040] },
+  { id: 'autosg',  name: 'Автодробовик', short: 'БД', dmg: 8, rate: 0.32, mag: 8, reserve: 40, reload: 3.0, spread: 0.085, bloom: 0, bloomMax: 0, adsMul: 0.75, pellets: 8, auto: true, head: 1.4, range: 35, fall: [6, 15, 0.25], zoom: 64, kick: [0.0300, 0.0100] },
 ];
+
+// Набор из трёх слотов: основное, тяжёлое и пистолет. slot у оружия говорит, в какой слот оно годится.
+const SLOT_OF = { 0: 0, 3: 0, 5: 0, 6: 0, 8: 0, 2: 1, 4: 1, 9: 1, 1: 2, 7: 2 };
+WEAPONS.forEach((w, i) => { w.slot = SLOT_OF[i]; });
+export const SLOT_NAMES = ['Основное', 'Тяжёлое', 'Пистолет'];
+export const DEFAULT_LOADOUT = [0, 2, 1];
+// Приводит набор от клиента к допустимому: в каждом слоте оружие своего класса, иначе берём стандартное.
+export function cleanLoadout(l) {
+  const out = DEFAULT_LOADOUT.slice();
+  if (Array.isArray(l)) for (let s = 0; s < 3; s++) { const i = l[s]; if (Number.isInteger(i) && WEAPONS[i] && WEAPONS[i].slot === s) out[s] = i; }
+  return out;
+}
 
 // Зоны попадания (от ног): 0 — ноги, 1 — туловище и руки, 2 — голова. Сервер и клиент считают одинаково.
 export const ZONES = ['НОГИ', 'ТУЛОВИЩЕ', 'ГОЛОВА'];

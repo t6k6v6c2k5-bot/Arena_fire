@@ -11,6 +11,7 @@ const $ = (id) => document.getElementById(id);
 const clamp = S.clamp;
 // Платформа: телефон (тач, авто-огонь и помощь прицела) или ПК (мышь и клавиатура, без помощников). Можно переопределить в настройках.
 const lsGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch { /* память устройства недоступна */ } };
 const platform = ['pc', 'mobile'].includes(lsGet('af_platform')) ? lsGet('af_platform') : (matchMedia('(pointer: coarse)').matches ? 'mobile' : 'pc');
 const isTouch = platform === 'mobile';
 document.body.classList.toggle('touch-ui', isTouch);
@@ -20,7 +21,11 @@ const Q = new URLSearchParams(typeof location !== 'undefined' ? location.search 
 let accountDone = false;
 let account = null; // профиль вошедшего игрока (null — гость)
 const accountReady = (typeof fetch === 'function' ? fetch('/api/me', { credentials: 'same-origin' }).then((r) => r.json()).then((d) => { account = d && d.user ? d.user : null; }) : Promise.resolve()).catch(() => {}).then(() => { accountDone = true; });
-const MODE_GOAL = { tdm: 'Первые до 40 убийств', hs: 'Голова убивает сразу', ffa: 'До 20 убийств', gg: 'Пройдите все 5 оружий' };
+const modeGoal = (id, n) => ({ tdm: 'Первые до 40 убийств', hs: 'Голова убивает сразу', ffa: 'До 20 убийств', gg: `Пройдите все ${n} оружий`, hill: 'Держите зону: очки идут за секунды' }[id] || '');
+const esc = (t) => String(t ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// Набор оружия (основное, тяжёлое, пистолет) хранится на устройстве; сервер всё равно проверяет его сам.
+const readLoadout = () => { try { return S.cleanLoadout(JSON.parse(lsGet('af_loadout'))); } catch { return S.DEFAULT_LOADOUT.slice(); } };
+let loadout = readLoadout();
 const PLAT_MARK = { m: ' 📱', p: ' 🖥' };
 const dispName = (pi) => (pi ? (pi.tag ? `[${pi.tag}] ${pi.name}` : pi.name) + (PLAT_MARK[pi.pl] || '') : '?');
 
@@ -33,7 +38,9 @@ let wantJoin = false;
 let myId = 0;
 let myTeam = 0;
 let modeName = 'Командный бой';
-let modeId = 'tdm', teamsMode = true, modeLim = 40, ggN = 5, gunMode = false;
+let modeId = 'tdm', teamsMode = true, modeLim = 40, ggN = S.GG_ORDER.length, gunMode = false, hillMode = false;
+let hillGroup = null, hillState = null, hillMats = [];
+let joinPrefs = null; // что именно просим у сервера: быстрый бой, комнату, код...
 const isEnemy = (team) => !teamsMode || team !== myTeam; // в режимах «каждый сам за себя» врагов нет своих
 const roster = new Map();
 
@@ -298,8 +305,10 @@ let vmShown = false;
 const sleeveColor = (team) => (team === 0 ? 0x2a4f8a : 0x8e3029);
 
 function buildViewmodels() {
-  for (const v of vmViews) vmScene.remove(v.group);
+  for (const v of vmViews) if (v) vmScene.remove(v.group);
+  const need = new Set(gunMode ? S.GG_ORDER : loadout);
   vmViews = S.WEAPONS.map((_, i) => {
+    if (!need.has(i)) return null;
     const v = buildViewmodel(i, sleeveColor(teamsMode ? myTeam : 0), roster.get(myId)?.eq?.gun);
     v.group.visible = false;
     vmScene.add(v.group);
@@ -314,9 +323,9 @@ function reloadProgress() {
 
 function updateViewmodel(dt, speed) {
   const scoped = scopeOn();
-  vmShown = joined && alive && !menuOpen && !scoped && vmViews.length > 0;
+  vmShown = joined && alive && !menuOpen && !scoped && !!vmViews[selWeapon];
   if (!vmViews.length) return;
-  vmViews.forEach((v, i) => { v.group.visible = vmShown && i === selWeapon; });
+  vmViews.forEach((v, i) => { if (v) v.group.visible = vmShown && i === selWeapon; });
   vm.kick *= Math.exp(-dt * 13);
   vm.bob += dt * speed * 1.5;
   vm.swap = Math.max(0, vm.swap - dt * 4);
@@ -330,7 +339,7 @@ function updateViewmodel(dt, speed) {
     vm.cyc += dt / vm.cycDur;
     if (vm.cyc > 1) vm.cyc = -1;
   }
-  if (!vmShown) return;
+  if (!vmShown || !vmViews[selWeapon]) return;
   animateViewmodel(vmViews[selWeapon], {
     kick: vm.kick, ads: adsAmt, rl: reloadProgress(), swap: vm.swap, bob: vm.bob, k: Math.min(1, speed / 6),
     swx: vm.swx, swy: vm.swy, cyc: vm.cyc, flash: vm.flash, roll: vm.roll,
@@ -339,7 +348,7 @@ function updateViewmodel(dt, speed) {
 
 // ---------- Прицеливание, отдача, тряска ----------
 const BASE_FOV = 72;
-const SHAKE = [0.0030, 0.0022, 0.0090, 0.0020, 0.0130];
+const SHAKE = [0.0030, 0.0022, 0.0090, 0.0020, 0.0130, 0.0026, 0.0045, 0.0065, 0.0085, 0.0085];
 let adsAmt = 0;
 let curFov = BASE_FOV;
 let shakeAmp = 0;
@@ -360,7 +369,11 @@ const el = {
   prot: $('prot'), msg: $('msg'), hitm: $('hitm'), vig: $('dmgvig'), dir: $('dmgdir'),
   feed: $('killfeed'), sb: $('scoreboard'), crosshair: $('crosshair'),
   scope: $('scope'), nums: $('dmgnums'), streak: $('streak'),
-  wb: S.WEAPONS.map((_, i) => $('wb' + i)),
+  wb: [0, 1, 2].map((i) => $('wb' + i)),
+  wn: [0, 1, 2].map((i) => $('wb' + i).querySelector('.wn')),
+  wa: [0, 1, 2].map((i) => $('wb' + i).querySelector('.wa')),
+  pips: $('pips'), rlfill: $('rlfill'), radar: $('radar'),
+  hill: $('hillbar'), hillState: $('hillState'), hillTimer: $('hillTimer'), hillFill: $('hillFill'),
 };
 let transientMsg = null;
 let gap = 8;
@@ -401,12 +414,36 @@ function updateAmmo() {
   const sm = document.createElement('small');
   sm.textContent = ` / ${res}`;
   el.ammo.appendChild(sm);
+  updatePips(a[0], w.mag);
+}
+// Полоски патронов: пересоздаём при смене оружия, а при стрельбе только гасим лишние.
+let pipsFor = -1, pipEls = [], pipMag = -1;
+function updatePips(mag, cap) {
+  if (pipsFor !== selWeapon) {
+    pipsFor = selWeapon; pipMag = -1; pipEls = [];
+    el.pips.innerHTML = '';
+    el.pips.classList.toggle('many', cap > 40);
+    el.pips.style.width = `${Math.min(150, cap * 7)}px`;
+    for (let k = 0; k < cap; k++) { const i = document.createElement('i'); el.pips.appendChild(i); pipEls.push(i); }
+  }
+  if (pipMag === mag) return;
+  pipMag = mag;
+  for (let k = 0; k < pipEls.length; k++) pipEls[k].classList.toggle('off', k >= mag);
+}
+// Три слота набора: подписи ставим при входе в бой, патроны обновляем на лету.
+function buildWbar() {
+  for (let s = 0; s < 3; s++) {
+    el.wn[s].textContent = S.WEAPONS[loadout[s]].name;
+    el.wb[s].classList.toggle('hidden', gunMode);
+  }
 }
 function updateWbar() {
-  for (let i = 0; i < el.wb.length; i++) {
-    const a = info.wp?.[i];
-    el.wb[i].classList.toggle('on', i === selWeapon);
-    el.wb[i].classList.toggle('empty', !!a && a[0] <= 0 && a[1] <= 0);
+  for (let s = 0; s < 3; s++) {
+    const wi = loadout[s];
+    const a = info.wp?.[wi];
+    el.wb[s].classList.toggle('on', wi === selWeapon);
+    el.wb[s].classList.toggle('empty', !!a && a[0] <= 0 && a[1] <= 0);
+    if (a) el.wa[s].textContent = a[1] >= 999 ? `${a[0]} / ∞` : `${a[0]} / ${a[1]}`;
   }
 }
 function fmtTime(sec) {
@@ -519,7 +556,7 @@ function ensureSocket() {
     if (joined) { joined = false; resetNetState(); openMenu(); $('status').textContent = 'Соединение потеряно, переподключаюсь…'; }
   });
   socket.on('denied', (d) => {
-    wantJoin = false; $('status').textContent = d?.reason || 'Доступ закрыт'; $('playBtn').disabled = false;
+    wantJoin = false; $('status').textContent = d?.reason || 'Доступ закрыт'; $('playBtn').disabled = false; joinBusy = false; refreshMenu();
     if (d?.login) $('loginLink').classList.remove('hidden');
   });
   socket.on('reward', (d) => showReward(d));
@@ -527,20 +564,25 @@ function ensureSocket() {
 
   socket.on('welcome', (d) => {
     myId = d.id; myTeam = d.team;
-    modeId = d.mode || 'tdm'; modeName = d.modeName || 'Командный бой'; teamsMode = d.teams !== 0; modeLim = d.lim || 0; ggN = d.ggN || 5; gunMode = modeId === 'gg';
+    modeId = d.mode || 'tdm'; modeName = d.modeName || 'Командный бой'; teamsMode = d.teams !== 0; modeLim = d.lim || 0; ggN = d.ggN || S.GG_ORDER.length; gunMode = modeId === 'gg'; hillMode = !!d.hill;
     $('wbar').classList.toggle('hidden', gunMode);
+    document.body.classList.toggle('solo', !teamsMode);
+    el.hill.classList.toggle('hidden', !hillMode);
+    hillState = null; if (hillGroup) hillGroup.visible = false;
+    buildWbar();
     $('modeTag').textContent = modeName;
     setRoster(d.players);
     resetNetState();
     joined = true;
     buildViewmodels();
     killStreak = 0; multi = { n: 0, t: 0 };
+    joinBusy = false; lastWelcome = d; $('status').textContent = '';
     $('playBtn').disabled = false;
     $('hud').classList.remove('hidden');
     $('touch').classList.remove('hidden');
     closeMenu();
     lockPointer();
-    flashMsg(teamsMode ? `Вы в команде «${S.TEAM_NAMES[myTeam]}»` : modeName, `${MODE_GOAL[modeId] || ''} · боты: ${d.skillName || 'Лёгкие'}`, 3200);
+    flashMsg(teamsMode ? `Вы в команде «${S.TEAM_NAMES[myTeam]}»` : modeName, `${modeGoal(modeId, ggN)} · боты: ${d.skillName || 'Лёгкие'}`, 3200);
   });
   socket.on('roster', (d) => setRoster(d.players));
 
@@ -592,12 +634,11 @@ function resetNetState() {
 async function doJoin() {
   if (!accountDone) await accountReady;
   const name = ($('nameInput').value || '').trim().slice(0, 16);
-  if (!account) localStorage.setItem('af_name', name);
-  const mode = ['quick', 'create', 'room', 'code'].includes(Q.get('mode')) ? Q.get('mode') : 'quick';
-  const skill = Q.get('skill') !== null ? parseInt(Q.get('skill'), 10) || 0 : parseInt($('skill').value, 10) || 0;
+  if (!account) lsSet('af_name', name);
+  const jp = joinPrefs || { mode: 'quick', skill: pick.skill, gm: pick.gm };
   socket.emit('join', {
-    mode, skill, roomId: parseInt(Q.get('room'), 10) || 0, code: Q.get('code') || '', roomName: Q.get('rn') || '', priv: Q.get('priv') === '1',
-    gm: ['tdm', 'hs', 'ffa', 'gg'].includes(Q.get('gm')) ? Q.get('gm') : 'tdm', guest: !account, name, touch: isTouch,
+    mode: ['quick', 'create', 'room', 'code'].includes(jp.mode) ? jp.mode : 'quick', skill: jp.skill | 0, roomId: jp.roomId | 0, code: jp.code || '',
+    roomName: jp.roomName || '', priv: !!jp.priv, gm: MODE_LIST.includes(jp.gm) ? jp.gm : 'tdm', guest: !account, name, touch: isTouch, loadout,
   });
 }
 
@@ -660,6 +701,7 @@ function onSnap(s) {
     for (const r of s.p) { const v = gunMode ? (r[10] || 0) : r[8]; if (r[0] === myId) mine = v; else if (v > best) best = v; }
     el.s0.textContent = gunMode ? `${mine + 1}/${ggN}` : mine; el.s1.textContent = gunMode ? `${best + 1}/${ggN}` : best;
   }
+  if (s.hl) applyHill(s.hl);
   if (gunMode && alive && m.w !== selWeapon) { selWeapon = m.w; vm.swap = 1; vm.cyc = -1; input.ads = false; localBloom = 0; audio.swap(); updateAmmo(); }
   el.timer.textContent = fmtTime(s.rem);
   if (s.st === 1) updateEndCountdown(s);
@@ -686,6 +728,7 @@ function updateEndCountdown(s) {
 function onShot(d) {
   const w = S.WEAPONS[d.w] || S.WEAPONS[0];
   const own = d.id === myId;
+  if (!own) radarSeen.set(d.id, performance.now() + 1800); // стрелявший на миг виден на радаре
   const ox = d.o[0], oy = d.o[1], oz = d.o[2];
   const b = basis();
   let whizD = 99, whizSide = 0;
@@ -767,7 +810,7 @@ function applyLook(dx, dy, mult) {
 }
 
 function changeWeapon(i) {
-  if (gunMode || i === selWeapon || i < 0 || i >= S.WEAPONS.length || !joined || !alive) return;
+  if (gunMode || i === selWeapon || !loadout.includes(i) || !joined || !alive) return;
   selWeapon = i;
   vm.swap = 1; vm.cyc = -1;
   input.ads = false;
@@ -816,8 +859,8 @@ function localFireUpdate(nowS) {
   const mx = camPos.x + b.fx * 0.55 + b.rx * 0.13 * kk, my = camPos.y + b.fy * 0.55 + b.uy * -0.07 * kk, mz = camPos.z + b.fz * 0.55 + b.rz * 0.13 * kk;
   const sp = 1.6 + Math.random() * 0.8;
   fx.casing(mx, my, mz,
-    b.rx * sp + b.ux * 0.4 - b.fx * 0.3 + me.vx * 0.5, 1.3 + Math.random() * 0.8, b.rz * sp + b.uz * 0.4 - b.fz * 0.3 + me.vz * 0.5, selWeapon === 2);
-  if (Math.random() < 0.6) fx.smoke(camPos.x + b.fx * 1.1 + b.rx * 0.1 * kk, camPos.y + b.fy * 1.1 - 0.08 * kk, camPos.z + b.fz * 1.1 + b.rz * 0.1 * kk, selWeapon === 4 ? 1.8 : 1);
+    b.rx * sp + b.ux * 0.4 - b.fx * 0.3 + me.vx * 0.5, 1.3 + Math.random() * 0.8, b.rz * sp + b.uz * 0.4 - b.fz * 0.3 + me.vz * 0.5, selWeapon === 2 || selWeapon === 9);
+  if (Math.random() < 0.6) fx.smoke(camPos.x + b.fx * 1.1 + b.rx * 0.1 * kk, camPos.y + b.fy * 1.1 - 0.08 * kk, camPos.z + b.fz * 1.1 + b.rz * 0.1 * kk, selWeapon === 4 ? 1.8 : selWeapon === 8 ? 1.4 : 1);
   updateAmmo();
 }
 
@@ -828,7 +871,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'Tab') { e.preventDefault(); syncScoreboard(); }
   if (e.code === 'KeyR' && !e.repeat) input.reloadLatch = true;
   if (e.code === 'Space') e.preventDefault();
-  if (/^Digit[1-5]$/.test(e.code)) changeWeapon(+e.code.slice(5) - 1);
+  if (/^Digit[1-3]$/.test(e.code)) changeWeapon(loadout[+e.code.slice(5) - 1]);
 });
 window.addEventListener('keyup', (e) => {
   keys[e.code] = false;
@@ -850,7 +893,8 @@ window.addEventListener('mouseup', (e) => {
 window.addEventListener('mousemove', (e) => { if (locked && !menuOpen) applyLook(e.movementX, e.movementY, 0.0022); });
 window.addEventListener('wheel', (e) => {
   if (!locked) return;
-  changeWeapon((selWeapon + (e.deltaY > 0 ? 1 : S.WEAPONS.length - 1)) % S.WEAPONS.length);
+  const at = Math.max(0, loadout.indexOf(selWeapon));
+  changeWeapon(loadout[(at + (e.deltaY > 0 ? 1 : 2)) % 3]);
 });
 canvas.addEventListener('click', () => { if (joined && !menuOpen && !isTouch && !locked) lockPointer(); });
 document.addEventListener('pointerlockchange', () => {
@@ -935,12 +979,12 @@ hold($('bJump'), () => { input.jumpBtn = true; }, () => { input.jumpBtn = false;
 hold($('bReload'), () => { input.reloadLatch = true; });
 hold($('bAds'), () => setAds(!input.ads));
 el.wb.forEach((b, i) => {
-  b.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation?.(); if (!menuOpen) changeWeapon(i); });
+  b.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation?.(); if (!menuOpen) changeWeapon(loadout[i]); });
 });
 hold($('bScore'), () => { sbPinned = !sbPinned; syncScoreboard(); });
 hold($('bMenu'), () => openMenu());
 
-document.addEventListener('touchmove', (e) => { if (e.target?.closest?.('.card')) return; e.preventDefault(); }, { passive: false });
+document.addEventListener('touchmove', (e) => { if (e.target?.closest?.('.card, .lcol, .rcol, .lbody')) return; e.preventDefault(); }, { passive: false });
 
 function releaseInputs() {
   for (const k of Object.keys(keys)) keys[k] = false;
@@ -950,10 +994,91 @@ function releaseInputs() {
 }
 
 // ---------- Меню ----------
+const MODE_LIST = ['tdm', 'hill', 'hs', 'ffa', 'gg'];
+const SKILLS = ['Лёгкие', 'Средние', 'Сложные'];
+const TABS = [['quick', 'Быстрая игра'], ['rooms', 'Комнаты'], ['create', 'Своя комната'], ['code', 'По коду']];
+const MODE_TXT = {
+  tdm: 'Две команды по четыре бойца. Первые до 40 убийств.',
+  hill: 'Держите зону: пока вы в ней одни, команде идут очки.',
+  hs: 'Считается только голова. Выстрел в неё убивает сразу.',
+  ffa: 'Каждый сам за себя. До 20 убийств.',
+  gg: 'Убили — получили новое оружие. Пройдите все восемь.',
+};
+const SV = (p) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
+const MODE_SVG = {
+  tdm: SV('<circle cx="8" cy="8" r="3"/><circle cx="16" cy="8" r="3"/><path d="M2 20c.5-3.5 3-5 6-5M22 20c-.5-3.5-3-5-6-5M9 20c.5-3 1.5-4 3-4s2.5 1 3 4"/>'),
+  hill: SV('<path d="M6 21V3M6 4h12l-2.5 4.5L18 13H6"/>'),
+  hs: SV('<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3.5"/><circle cx="12" cy="12" r=".6" fill="currentColor"/>'),
+  ffa: SV('<path d="M12 3l2.5 6 6.5.5-5 4.3 1.6 6.4L12 16.8 6.4 20.2 8 13.8 3 9.5 9.5 9z"/>'),
+  gg: SV('<path d="M3 10h13l2 2h3v3h-6l-1 3H8l1-3H3z"/><path d="M6 10V8h8v2"/>'),
+};
+const WDESC = {
+  rifle: 'Надёжная классика: хорош на любой дистанции.',
+  smg: 'Льёт очередью вблизи и легко держится в руках.',
+  carbine: 'Лёгкий и точный: отдача мягче, чем у автомата.',
+  lmg: 'Сто патронов в ленте. Долго перезаряжается, зато не жалеет свинец.',
+  dmr: 'Одиночные выстрелы на дальнюю дистанцию, в голову — наповал.',
+  shotgun: 'Помпа: в упор сносит почти любого.',
+  sniper: 'Один точный выстрел решает бой. Сильное приближение.',
+  autosg: 'Скорострельный дробовик, страшен в тесных проходах.',
+  pistol: 'Быстро достаётся, патронов хватит надолго.',
+  revolver: 'Шесть тяжёлых выстрелов, в голову — наповал.',
+};
+// Полоски характеристик без цифр: просто «много или мало».
+const wStats = (w) => {
+  const dmg = Math.min(1, (w.dmg * (w.pellets > 1 ? w.pellets * 0.6 : 1)) / 90);
+  const rate = Math.min(1, 1 / w.rate / 15);
+  const acc = 1 - Math.min(1, (w.spread * w.adsMul) / 0.04);
+  return [['Урон', dmg], ['Темп', rate], ['Точность', acc]];
+};
+const bar = (v) => `<i>${[1, 2, 3, 4, 5].map((k) => `<u class="${k <= Math.max(1, Math.round(v * 5)) ? 'f' : ''}"></u>`).join('')}</i>`;
+
+const pick = { tab: 'quick', gm: 'tdm', skill: 0, roomId: 0 };
+{
+  const qm = Q.get('mode');
+  pick.gm = MODE_LIST.includes(Q.get('gm')) ? Q.get('gm') : MODE_LIST.includes(lsGet('af_gm')) ? lsGet('af_gm') : 'tdm';
+  pick.skill = Q.get('skill') !== null ? clamp(parseInt(Q.get('skill'), 10) || 0, 0, 2) : clamp(parseInt(lsGet('af_skill'), 10) || 0, 0, 2);
+  pick.tab = { create: 'create', room: 'rooms', code: 'code' }[qm] || 'quick';
+  if (qm === 'room') pick.roomId = parseInt(Q.get('room'), 10) || 0;
+}
+let joinBusy = false;
+let lastWelcome = null;
+
+function renderLoadout() {
+  const box = $('loadout');
+  if (pick.gm === 'gg' && (pick.tab === 'quick' || pick.tab === 'create')) {
+    box.innerHTML = '<p class="muted">В гонке вооружений оружие выдаём сами: с каждым убийством следующее.</p>';
+    return;
+  }
+  box.innerHTML = [0, 1, 2].map((slot) => {
+    const w = S.WEAPONS[loadout[slot]];
+    const chips = S.WEAPONS.map((x, i) => (x.slot === slot ? `<button data-slot="${slot}" data-w="${i}" class="${loadout[slot] === i ? 'on' : ''}">${x.name}</button>` : '')).join('');
+    const bars = wStats(w).map(([n, v]) => `<span>${n}</span>${bar(v)}`).join('');
+    return `<div class="ls"><div class="lt"><span>${S.SLOT_NAMES[slot]}</span><b>${w.name}</b></div><div class="bars">${bars}</div><div class="wd">${WDESC[w.id] || ''}</div><div class="chips">${chips}</div></div>`;
+  }).join('');
+}
+
+function refreshMenu() {
+  $('launch').className = `launch tab-${pick.tab}${joined ? ' paused' : ''}`;
+  $('tabs').innerHTML = TABS.map(([id, n]) => `<button data-tab="${id}" class="${id === pick.tab ? 'on' : ''}">${n}</button>`).join('');
+  $('modeGrid').innerHTML = MODE_LIST.map((id) => `<button class="mc ${id === pick.gm ? 'sel' : ''}" data-gm="${id}"><span class="ic">${MODE_SVG[id]}</span><span><b>${S.MODES[id].name}${id === 'hill' ? ' <em class="new">новое</em>' : ''}</b><small>${MODE_TXT[id]}</small></span></button>`).join('');
+  $('skillSeg').innerHTML = '<span>Боты</span>' + SKILLS.map((n, i) => `<button data-skill="${i}" class="${i === pick.skill ? 'on' : ''}">${n}</button>`).join('');
+  renderLoadout();
+  const guestCreate = pick.tab === 'create' && !account;
+  const labels = { quick: 'В БОЙ', create: 'СОЗДАТЬ И ИГРАТЬ', code: 'ВОЙТИ ПО КОДУ', rooms: 'В БОЙ' };
+  $('playBtn').textContent = joined ? 'ПРОДОЛЖИТЬ' : guestCreate ? 'НУЖЕН АККАУНТ' : labels[pick.tab];
+  $('playBtn').classList.toggle('hidden', pick.tab === 'rooms' && !joined);
+  $('playBtn').disabled = joinBusy || (!joined && guestCreate);
+  $('createNote').textContent = account ? 'Режим и сложность выберите выше. После создания покажем код для друзей.' : 'Свои комнаты открыты игрокам с аккаунтом. Войдите, и они появятся.';
+  $('pauseBox').classList.toggle('hidden', !joined);
+  $('loadBox').classList.toggle('hidden', joined);
+  if (joined && lastWelcome) $('pauseInfo').textContent = `${modeName} · боты: ${lastWelcome.skillName || 'Лёгкие'}${lastWelcome.code ? ` · код комнаты ${lastWelcome.code}` : ''}`;
+}
+
 function openMenu() {
   menuOpen = true;
   $('menu').classList.remove('hidden');
-  $('playBtn').textContent = joined ? 'ПРОДОЛЖИТЬ' : 'В БОЙ';
+  refreshMenu();
   releaseInputs();
   if (document.pointerLockElement) document.exitPointerLock();
 }
@@ -962,20 +1087,79 @@ function closeMenu() {
   $('menu').classList.add('hidden');
 }
 
-$('nameInput').value = localStorage.getItem('af_name') || '';
+async function loadRooms() {
+  if (typeof fetch !== 'function') return;
+  try {
+    const r = await fetch('/api/rooms', { credentials: 'same-origin' });
+    const { rooms } = await r.json();
+    $('roomList').innerHTML = rooms.length
+      ? rooms.map((x) => `<div class="rrow ${x.id === pick.roomId ? 'pre' : ''}"><div class="nm">${esc(x.name)}<small>${esc(x.modeName)} · ${SKILLS[x.skill] || ''} · ${x.state ? 'итоги матча' : 'идёт бой'}</small></div><span class="cnt">${x.humans}/${x.max}</span><button data-room="${x.id}" ${x.humans >= x.max || joinBusy ? 'disabled' : ''}>Войти</button></div>`).join('')
+      : '<div class="rempty">Открытых комнат пока нет.<br>Создайте свою на соседней вкладке или начните быструю игру.</div>';
+  } catch { $('roomList').innerHTML = '<div class="rempty">Не удалось загрузить список. Попробуйте ещё раз через пару секунд.</div>'; }
+}
+
+function startJoin(jp) {
+  if (jp.mode === 'code' && jp.code.length !== 5) { $('status').textContent = 'Код состоит из 5 символов'; return; }
+  audio.init();
+  toggleFullscreen(true);
+  joinPrefs = jp;
+  lsSet('af_gm', pick.gm); lsSet('af_skill', String(pick.skill)); lsSet('af_loadout', JSON.stringify(loadout));
+  wantJoin = true; joinBusy = true;
+  $('playBtn').disabled = true;
+  $('status').textContent = 'Подключение…';
+  ensureSocket();
+  if (socket.connected) doJoin();
+}
+function currentJoin() {
+  if (pick.tab === 'create') return { mode: 'create', skill: pick.skill, gm: pick.gm, roomName: $('roomName').value.trim(), priv: $('roomPriv').checked };
+  if (pick.tab === 'code') return { mode: 'code', code: $('codeInput').value.trim().toUpperCase() };
+  return { mode: 'quick', skill: pick.skill, gm: pick.gm };
+}
+
+$('tabs').addEventListener('click', (e) => {
+  const b = e.target?.closest?.('button');
+  if (!b || !b.dataset.tab) return;
+  pick.tab = b.dataset.tab; $('status').textContent = '';
+  refreshMenu();
+  if (pick.tab === 'rooms') loadRooms();
+});
+$('modeGrid').addEventListener('click', (e) => { const b = e.target?.closest?.('button'); if (!b || !b.dataset.gm) return; pick.gm = b.dataset.gm; lsSet('af_gm', pick.gm); refreshMenu(); });
+$('skillSeg').addEventListener('click', (e) => { const b = e.target?.closest?.('button'); if (!b || b.dataset.skill === undefined) return; pick.skill = clamp(parseInt(b.dataset.skill, 10) || 0, 0, 2); lsSet('af_skill', String(pick.skill)); refreshMenu(); });
+$('loadout').addEventListener('click', (e) => {
+  const b = e.target?.closest?.('button');
+  if (!b || b.dataset.w === undefined) return;
+  loadout[+b.dataset.slot] = +b.dataset.w;
+  loadout = S.cleanLoadout(loadout);
+  lsSet('af_loadout', JSON.stringify(loadout));
+  renderLoadout();
+});
+$('roomList').addEventListener('click', (e) => {
+  const b = e.target?.closest?.('button');
+  if (!b || !b.dataset.room || joinBusy) return;
+  startJoin({ mode: 'room', roomId: parseInt(b.dataset.room, 10) || 0 });
+});
+$('codeInput').addEventListener('input', (e) => { e.target.value = String(e.target.value || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5); });
+$('codeInput').addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') $('playBtn').click(); });
+$('roomName').addEventListener('keydown', (e) => e.stopPropagation());
+$('changeBtn').addEventListener('click', () => { location.href = '/play'; });
+setInterval(() => { if (menuOpen && !joined && pick.tab === 'rooms') loadRooms(); }, 4000);
+
+$('nameInput').value = lsGet('af_name') || '';
+$('codeInput').value = (Q.get('code') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5);
+$('roomName').value = Q.get('rn') || '';
+$('roomPriv').checked = Q.get('priv') === '1';
 accountReady.then(() => {
   const guest = !account;
   $('nameRow').classList.toggle('hidden', !guest);
   $('loginLink').classList.toggle('hidden', !guest);
   $('who').textContent = guest ? 'Вы играете как гость: прогресс не сохраняется' : `${account.nick} · ур. ${account.level} · ${account.rank}`;
+  refreshMenu();
 });
-const modeText = { quick: 'Быстрая игра', create: 'Новая комната', room: 'Комната из списка', code: 'Комната по коду' }[Q.get('mode')] || 'Быстрая игра';
-$('modeLine').textContent = modeText + (Q.get('mode') === 'code' && Q.get('code') ? ` · ${Q.get('code').toUpperCase()}` : '');
 $('sens').value = String(sens);
-$('skill').value = localStorage.getItem('af_skill') ?? '0';
-$('skill').addEventListener('change', (e) => localStorage.setItem('af_skill', e.target.value));
-$('sens').addEventListener('input', (e) => { sens = parseFloat(e.target.value) || 1; localStorage.setItem('af_sens', String(sens)); });
+$('sens').addEventListener('input', (e) => { sens = parseFloat(e.target.value) || 1; lsSet('af_sens', String(sens)); });
 $('nameInput').addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') $('playBtn').click(); });
+refreshMenu();
+if (pick.tab === 'rooms') loadRooms();
 
 // ---------- Полный экран ----------
 const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -1004,14 +1188,9 @@ $('fsBtn').addEventListener('click', () => toggleFullscreen());
 hold($('bFull'), () => toggleFullscreen());
 
 $('playBtn').addEventListener('click', () => {
-  audio.init();
-  toggleFullscreen(true);
-  if (joined) { closeMenu(); lockPointer(); return; }
-  wantJoin = true;
-  $('playBtn').disabled = true;
-  $('status').textContent = 'Подключение…';
-  ensureSocket();
-  if (socket.connected) doJoin();
+  if (joined) { audio.init(); toggleFullscreen(true); closeMenu(); lockPointer(); return; }
+  if (joinBusy) return;
+  startJoin(currentJoin());
 });
 
 // ---------- Индикатор цели под прицелом ----------
@@ -1056,6 +1235,88 @@ function autoFireUpdate(nowS) {
   if (!a || a[0] <= 0) return;
   input.localTap = true;
   input.fireLatch = true; // одиночный импульс на тик: для неавтоматов сервер видит нажатие
+}
+
+// ---------- Зона «Захват точки» ----------
+function ensureHill() {
+  if (hillGroup) return;
+  const mat = (opacity, side) => new THREE.MeshBasicMaterial({ color: 0xe3b04b, transparent: true, opacity, side, depthWrite: false, fog: false });
+  const wall = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 7, 48, 1, true), mat(0.16, THREE.DoubleSide));
+  wall.position.y = 3.5;
+  const disc = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 0.06, 48), mat(0.22, THREE.DoubleSide));
+  disc.position.y = 0.05;
+  const rim = new THREE.Mesh(new THREE.CylinderGeometry(1.01, 1.01, 0.14, 48, 1, true), mat(0.75, THREE.DoubleSide));
+  rim.position.y = 0.08;
+  hillGroup = new THREE.Group();
+  hillGroup.add(wall, disc, rim);
+  hillMats = [wall.material, disc.material, rim.material];
+  scene.add(hillGroup);
+}
+const HILL_COLOR = { '-1': 0xe3b04b, 0: 0x3b82f6, 1: 0xef4444, 2: 0xfacc15 };
+function applyHill(h) {
+  hillState = h;
+  ensureHill();
+  hillGroup.visible = true;
+  hillGroup.position.set(h[0], 0, h[1]);
+  hillGroup.scale.set(h[2], 1, h[2]);
+  const o = h[3];
+  for (const m of hillMats) m.color?.setHex?.(HILL_COLOR[o] ?? 0xe3b04b);
+  const mine = o === myTeam, foe = (o === 0 || o === 1) && o !== myTeam;
+  const inside = alive && Math.hypot(me.x - h[0], me.z - h[1]) <= h[2];
+  el.hillState.textContent = (o === 2 ? 'Точка спорная' : o === -1 ? 'Точка свободна' : mine ? 'Точка ваша' : 'Точка у врага') + (inside ? ' · вы в зоне' : '');
+  el.hill.classList.toggle('mine', mine);
+  el.hill.classList.toggle('foe', foe);
+  el.hill.classList.toggle('hot', o === 2);
+  el.hillTimer.textContent = `переезд через ${h[4]} с`;
+  el.hillFill.style.width = `${clamp(h[4] / S.HILL_TIME, 0, 1) * 100}%`;
+}
+
+// ---------- Радар ----------
+const radarSeen = new Map();
+const radarCtx = el.radar.getContext ? el.radar.getContext('2d') : null;
+let radarT = 0;
+function drawRadar(nowMs) {
+  if (!radarCtx || nowMs - radarT < 66) return;
+  radarT = nowMs;
+  const c = radarCtx, W = 150, H = 104, sc = 2.6, by = H * 0.64;
+  c.clearRect(0, 0, W, H);
+  if (!(joined && alive && !menuOpen)) return;
+  const cy = Math.cos(view.yaw), sy = Math.sin(view.yaw);
+  const px = (x, z) => W / 2 + ((x - me.x) * cy - (z - me.z) * sy) * sc;
+  const py = (x, z) => by + ((x - me.x) * sy + (z - me.z) * cy) * sc;
+  c.fillStyle = 'rgba(150,172,192,0.38)';
+  for (const b of S.BOXES) {
+    if (Math.abs(b.x - me.x) > 45 || Math.abs(b.z - me.z) > 30) continue;
+    c.beginPath();
+    c.moveTo(px(b.x0, b.z0), py(b.x0, b.z0)); c.lineTo(px(b.x1, b.z0), py(b.x1, b.z0));
+    c.lineTo(px(b.x1, b.z1), py(b.x1, b.z1)); c.lineTo(px(b.x0, b.z1), py(b.x0, b.z1));
+    c.closePath(); c.fill();
+  }
+  if (hillState) {
+    const [hx, hz, hr, ho] = hillState;
+    c.beginPath();
+    for (let k = 0; k <= 24; k++) { const a = (k / 24) * Math.PI * 2; const X = px(hx + Math.cos(a) * hr, hz + Math.sin(a) * hr), Y = py(hx + Math.cos(a) * hr, hz + Math.sin(a) * hr); if (k) c.lineTo(X, Y); else c.moveTo(X, Y); }
+    c.fillStyle = `${ho === 0 ? 'rgba(59,130,246' : ho === 1 ? 'rgba(239,68,68' : 'rgba(250,204,21'},0.28)`;
+    c.fill(); c.strokeStyle = 'rgba(255,255,255,0.7)'; c.lineWidth = 1.5; c.stroke();
+  }
+  if (lastSnap) {
+    for (const r of lastSnap.p) {
+      if (r[0] === myId || !r[6]) continue;
+      const pi = roster.get(r[0]);
+      const ally = teamsMode && pi?.team === myTeam;
+      if (!ally && !((radarSeen.get(r[0]) || 0) > nowMs)) continue;
+      let X = px(r[1], r[3]), Y = py(r[1], r[3]);
+      X = clamp(X, 4, W - 4); Y = clamp(Y, 4, H - 4);
+      c.beginPath(); c.arc(X, Y, 3.2, 0, 6.283);
+      c.fillStyle = ally ? (myTeam === 0 ? '#60a5fa' : '#f87171') : '#ff3b3b';
+      c.fill();
+      if (!ally) { c.strokeStyle = 'rgba(255,80,80,0.6)'; c.lineWidth = 1; c.beginPath(); c.arc(X, Y, 6, 0, 6.283); c.stroke(); }
+    }
+  }
+  c.fillStyle = 'rgba(255,255,255,0.12)';
+  c.beginPath(); c.moveTo(W / 2, by); c.lineTo(W / 2 - 38, by - 70); c.lineTo(W / 2 + 38, by - 70); c.closePath(); c.fill();
+  c.fillStyle = '#fff';
+  c.beginPath(); c.moveTo(W / 2, by - 6); c.lineTo(W / 2 + 4.5, by + 4); c.lineTo(W / 2 - 4.5, by + 4); c.closePath(); c.fill();
 }
 
 // ---------- Прицеливание / отдача ----------
@@ -1161,6 +1422,8 @@ function frame(nowMs) {
   el.crosshair.style.opacity = String(1 - adsAmt * 0.6);
   el.scope.classList.toggle('hidden', !scoped);
   el.prot.classList.toggle('hidden', !(info.prot && alive));
+  if (info.rl > 0) el.rlfill.style.width = `${Math.round(reloadProgress() * 100)}%`;
+  drawRadar(nowMs);
 
   renderer.clear();
   renderer.render(scene, camera);
